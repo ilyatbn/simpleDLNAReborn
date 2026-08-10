@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -8,7 +7,6 @@ using System.IO.Pipes;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Timers;
 using System.Windows.Forms;
 using System.Xml.Serialization;
 using log4net;
@@ -16,15 +14,16 @@ using log4net.Appender;
 using log4net.Config;
 using log4net.Core;
 using log4net.Layout;
+using log4net.Repository.Hierarchy;
 using NMaier.SimpleDlna.GUI.Properties;
 using NMaier.SimpleDlna.Server;
+using NMaier.SimpleDlna.Utilities;
 using Form = NMaier.Windows.Forms.Form;
 using SystemInformation = NMaier.SimpleDlna.Utilities.SystemInformation;
-using Timer = System.Timers.Timer;
 
 namespace NMaier.SimpleDlna.GUI
 {
-  public partial class FormMain : Form, IAppender
+  public partial class FormMain : Form
   {
     private const string DESCRIPTOR_FILE = "descriptors.xml";
 
@@ -35,21 +34,8 @@ namespace NMaier.SimpleDlna.GUI
     private readonly FileInfo cacheFile =
       new FileInfo(Path.Combine(CacheDir, "sdlna.cache"));
 
-#if DEBUG
-    private readonly FileInfo logFile =
-      new FileInfo(Path.Combine(CacheDir, "sdlna.dbg.log"));
-#else
     private readonly FileInfo logFile =
       new FileInfo(Path.Combine(CacheDir, "sdlna.log"));
-#endif
-
-    private readonly object appenderLock = new object();
-
-    private readonly Timer appenderTimer =
-      new Timer(2000);
-
-    private readonly ConcurrentQueue<LogEntry> pendingLogEntries =
-      new ConcurrentQueue<LogEntry>();
 
     private static readonly ILog log = LogManager.GetLogger(typeof (FormMain));
 
@@ -57,13 +43,10 @@ namespace NMaier.SimpleDlna.GUI
 
     private HttpServer httpServer;
 
-    private bool logging;
+    private readonly SleepInhibitor sleepInhibitor = new SleepInhibitor();
 
     public FormMain()
     {
-      HandleCreated += (o, e) => { logging = true; };
-      HandleDestroyed += (o, e) => { logging = false; };
-
       InitializeComponent();
 
       listImages.Images.Add("idle", Resources.idle);
@@ -76,8 +59,6 @@ namespace NMaier.SimpleDlna.GUI
       listImages.Images.Add("error", Resources.error);
       listImages.Images.Add("server", Resources.server.ToBitmap());
 
-      appenderTimer.Elapsed += (s, e) => { BeginInvoke((Action)(() => { DoAppendInternal(s, e); })); };
-
       SetupLogging();
 
       StartPipeNotification();
@@ -86,8 +67,60 @@ namespace NMaier.SimpleDlna.GUI
       if (!string.IsNullOrWhiteSpace(config.cache)) {
         cacheFile = new FileInfo(config.cache);
       }
+      preventSleepToolStripMenuItem.Checked = config.preventsleep;
+
       CreateHandle();
       SetupServer();
+
+      httpServer.Playback.Changed += PlaybackChanged;
+      UpdatePlaybackState();
+    }
+
+    /// <summary>
+    ///   Single place where playback state is turned into behaviour, so further
+    ///   consumers of <see cref="PlaybackMonitor" /> can just be added here.
+    /// </summary>
+    private void UpdatePlaybackState()
+    {
+      var monitor = httpServer?.Playback;
+      var playing = monitor != null && monitor.IsPlaying;
+
+      sleepInhibitor.Inhibit = playing && config.preventsleep;
+
+      var session = monitor?.Current;
+      if (playing && session != null) {
+        statusPlayback.Image = Resources.active;
+        statusPlayback.Text = $"Playing: {session.Title} — {session.Client}";
+      }
+      else {
+        statusPlayback.Image = Resources.idle;
+        statusPlayback.Text = "Nothing playing";
+      }
+    }
+
+    private void PlaybackChanged(object sender, EventArgs e)
+    {
+      // Raised from a stream or timer thread.
+      if (!IsHandleCreated || IsDisposed) {
+        return;
+      }
+      try {
+        BeginInvoke((Action)UpdatePlaybackState);
+      }
+      catch (ObjectDisposedException) {
+        // Racing a shutdown.
+      }
+      catch (InvalidOperationException) {
+        // Handle went away between the check and the call.
+      }
+    }
+
+    private void preventSleepToolStripMenuItem_CheckedChanged(object sender,
+      EventArgs e)
+    {
+      config.preventsleep = preventSleepToolStripMenuItem.Checked;
+      config.Save();
+      UpdatePlaybackState();
     }
 
     protected sealed override void CreateHandle()
@@ -279,8 +312,11 @@ namespace NMaier.SimpleDlna.GUI
     private void FormMain_FormClosed(object sender, FormClosedEventArgs e)
     {
       Text = "Going down...";
+      httpServer.Playback.Changed -= PlaybackChanged;
       httpServer.Dispose();
       httpServer = null;
+      // Releases the wake request; the machine can sleep normally again.
+      sleepInhibitor.Dispose();
     }
 
     private void FormMain_FormClosing(object sender, FormClosingEventArgs e)
@@ -435,9 +471,6 @@ namespace NMaier.SimpleDlna.GUI
       Show();
       WindowState = FormWindowState.Normal;
       ShowInTaskbar = true;
-      if (logger != null && logger.Items.Count > 0) {
-        logger.EnsureVisible(logger.Items.Count - 1);
-      }
     }
 
     private void openInBrowserToolStripMenuItem_Click(object sender,
@@ -488,10 +521,52 @@ namespace NMaier.SimpleDlna.GUI
       }
     }
 
+    /// <summary>
+    ///   Log levels offered in the settings dialog, coarsest first.
+    /// </summary>
+    internal static readonly string[] LogLevels =
+    {
+      "None", "Fatal", "Error", "Warn", "Info", "Debug"
+    };
+
+    internal const string DefaultLogLevel = "Error";
+
+    internal static Level ToLog4NetLevel(string name)
+    {
+      switch (name) {
+      case "None":
+        return Level.Off;
+      case "Fatal":
+        return Level.Fatal;
+      case "Warn":
+        return Level.Warn;
+      case "Info":
+        return Level.Info;
+      case "Debug":
+        return Level.Debug;
+      default:
+        return Level.Error;
+      }
+    }
+
+    /// <summary>
+    ///   Logging always goes to sdlna.log in the cache directory. Rolling is
+    ///   composite - by date so yesterday's log is separate, and by size so a
+    ///   single noisy day cannot fill the disk either. MaxSizeRollBackups keeps
+    ///   exactly one rolled file, so at most about a day of history survives.
+    /// </summary>
     private void SetupLogging()
     {
-      if (!config.filelogging) {
-        BasicConfigurator.Configure(this);
+      var hierarchy = (Hierarchy)LogManager.GetRepository();
+      // Called again whenever the settings dialog closes; without resetting,
+      // every visit would stack another appender on the root logger.
+      hierarchy.ResetConfiguration();
+
+      var level = ToLog4NetLevel(config.loglevel);
+      if (level == Level.Off) {
+        hierarchy.Root.Level = Level.Off;
+        hierarchy.Threshold = Level.Off;
+        hierarchy.Configured = true;
         return;
       }
 
@@ -504,15 +579,21 @@ namespace NMaier.SimpleDlna.GUI
       {
         File = logFile.FullName,
         Layout = layout,
-        MaximumFileSize = "10MB",
-        MaxSizeRollBackups = 3,
-        RollingStyle = RollingFileAppender.RollingMode.Size,
-        ImmediateFlush = false,
-        Threshold = Level.Info
+        AppendToFile = true,
+        RollingStyle = RollingFileAppender.RollingMode.Composite,
+        DatePattern = "'.'yyyy-MM-dd",
+        MaxSizeRollBackups = 1,
+        MaximumFileSize = "5MB",
+        StaticLogFileName = true,
+        PreserveLogFileNameExtension = true,
+        ImmediateFlush = true,
+        Threshold = level
       };
       fileAppender.ActivateOptions();
 
-      BasicConfigurator.Configure(this, fileAppender);
+      BasicConfigurator.Configure(hierarchy, fileAppender);
+      hierarchy.Root.Level = level;
+      hierarchy.Threshold = level;
     }
 
     private void SetupServer()
@@ -567,97 +648,5 @@ namespace NMaier.SimpleDlna.GUI
       base.SetVisibleCore(value);
     }
 
-    public void DoAppend(LoggingEvent loggingEvent)
-    {
-      if (!logging) {
-        return;
-      }
-      if (loggingEvent == null) {
-        return;
-      }
-      if (loggingEvent.Level < Level.Notice) {
-        return;
-      }
-      var cls = loggingEvent.LoggerName;
-      cls = cls.Substring(cls.LastIndexOf('.') + 1);
-      var key = "info";
-      if (loggingEvent.Level >= Level.Error) {
-        key = "error";
-      }
-      else {
-        if (loggingEvent.Level >= Level.Warn) {
-          key = "warn";
-        }
-      }
-      pendingLogEntries.Enqueue(new LogEntry
-      {
-        Class = cls,
-        Exception = loggingEvent.GetExceptionString(),
-        Key = key,
-        Message = loggingEvent.RenderedMessage,
-        Time = loggingEvent.TimeStamp.ToString("T")
-      });
-      lock (appenderLock) {
-        appenderTimer.Enabled = true;
-      }
-    }
-
-    public void DoAppendInternal(object sender,
-      ElapsedEventArgs e)
-    {
-      lock (appenderLock) {
-        appenderTimer.Enabled = false;
-      }
-      if (!logging) {
-        return;
-      }
-      ListViewItem last = null;
-      logger.BeginUpdate();
-      try {
-        LogEntry entry;
-        while (pendingLogEntries.TryDequeue(out entry)) {
-          if (logger.Items.Count >= 300) {
-            logger.Items.RemoveAt(0);
-          }
-          last = logger.Items.Add(
-            new ListViewItem(new[]
-            {
-              entry.Time, entry.Class, entry.Message
-            }));
-          last.ImageKey = entry.Key;
-          if (!string.IsNullOrWhiteSpace(entry.Exception)) {
-            last = logger.Items.Add(
-              new ListViewItem(new[]
-              {
-                string.Empty, entry.Class, entry.Exception
-              }));
-            last.ImageKey = entry.Key;
-            last.IndentCount = 1;
-          }
-        }
-      }
-      finally {
-        logger.EndUpdate();
-      }
-      if (last != null) {
-        logger.EnsureVisible(last.Index);
-        colLogTime.AutoResize(ColumnHeaderAutoResizeStyle.ColumnContent);
-        colLogLogger.AutoResize(ColumnHeaderAutoResizeStyle.ColumnContent);
-        colLogMessage.AutoResize(ColumnHeaderAutoResizeStyle.ColumnContent);
-      }
-    }
-
-    private struct LogEntry
-    {
-      public string Class;
-
-      public string Exception;
-
-      public string Key;
-
-      public string Message;
-
-      public string Time;
-    }
   }
 }

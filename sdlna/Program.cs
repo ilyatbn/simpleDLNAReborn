@@ -198,6 +198,9 @@ namespace NMaier.SimpleDlna
         if (!string.IsNullOrEmpty(options.FriendlyName)) {
           fs.FriendlyName = options.FriendlyName;
         }
+        fs.ChangeDelay = TimeSpan.FromSeconds(Math.Max(options.RescanDelay, 1));
+        fs.RescanInterval = TimeSpan.FromMinutes(
+          Math.Max(options.RescanInterval, 0));
         if (options.CacheFile != null) {
           fs.SetCacheFile(options.CacheFile);
         }

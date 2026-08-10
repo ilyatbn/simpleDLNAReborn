@@ -333,9 +333,14 @@ namespace NMaier.SimpleDlna.Server
         }
         InfoFormat("{0} - {1} response for {2}", this, (uint)statusCode, Path);
         state = HttpStates.Writing;
+        // Held for exactly as long as the bytes are flowing, so the monitor
+        // sees a stream that is aborted mid-way end just like one that
+        // completes.
+        var playback = StartPlayback();
         var sp = new StreamPump(responseStream, stream, BUFFER_SIZE);
         sp.Pump((pump, result) =>
         {
+          playback?.Dispose();
           pump.Input.Close();
           pump.Input.Dispose();
           if (result == StreamPumpResult.Delivered) {
@@ -361,6 +366,20 @@ namespace NMaier.SimpleDlna.Server
       finally {
         responseBody?.Dispose();
       }
+    }
+
+    /// <summary>
+    ///   Registers this transfer with the server's playback monitor, when it is
+    ///   media content rather than a cover or subtitle. HEAD requests carry no
+    ///   body and so are not playback.
+    /// </summary>
+    private IDisposable StartPlayback()
+    {
+      var media = response as IMediaStreamResponse;
+      if (media == null || !media.IsPlayback || Method == "HEAD") {
+        return null;
+      }
+      return owner.Playback.Begin(media.MediaItem, RemoteEndpoint.Address);
     }
 
     private void SetupResponse()

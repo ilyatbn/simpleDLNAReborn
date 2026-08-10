@@ -21,17 +21,23 @@ namespace NMaier.SimpleDlna.FileMediaServer
     private static readonly StringComparer icomparer =
       StringComparer.CurrentCultureIgnoreCase;
 
-    private static readonly double changeDefaultTime =
-      TimeSpan.FromSeconds(30).TotalMilliseconds;
+    /// <summary>
+    ///   How long to wait after a filesystem change before rescanning. Changes
+    ///   arriving during the wait are coalesced into the pending rescan, so a
+    ///   bulk copy still only costs one pass.
+    /// </summary>
+    public static readonly TimeSpan DefaultChangeDelay =
+      TimeSpan.FromSeconds(5);
 
-    private static readonly double changeRenamedTime =
-      TimeSpan.FromSeconds(10).TotalMilliseconds;
-
-    private static readonly double changeDeleteTime =
-      TimeSpan.FromSeconds(2).TotalMilliseconds;
+    /// <summary>
+    ///   Safety net for changes the watcher cannot see - network shares, a
+    ///   dropped watcher buffer, clock-based staleness.
+    /// </summary>
+    public static readonly TimeSpan DefaultRescanInterval =
+      TimeSpan.FromMinutes(30);
 
     private readonly Timer changeTimer =
-      new Timer(TimeSpan.FromSeconds(20).TotalMilliseconds);
+      new Timer(DefaultChangeDelay.TotalMilliseconds);
 
     private readonly DirectoryInfo[] directories;
 
@@ -45,11 +51,9 @@ namespace NMaier.SimpleDlna.FileMediaServer
     private readonly FileSystemWatcher[] watchers;
 
     private readonly Timer watchTimer =
-      new Timer(TimeSpan.FromMinutes(random.Next(27, 33)).TotalMilliseconds);
+      new Timer(DefaultRescanInterval.TotalMilliseconds);
 
     private bool isRescanning;
-
-    private DateTime lastChanged = DateTime.Now;
 
     private ConcurrentQueue<WeakReference> pendingFiles = new ConcurrentQueue<WeakReference>();
 
@@ -81,6 +85,19 @@ namespace NMaier.SimpleDlna.FileMediaServer
     }
 
     internal ExtensionFilter Filter { get; }
+
+    /// <summary>
+    ///   Delay between a detected change and the resulting rescan. Set before
+    ///   <see cref="Load" />.
+    /// </summary>
+    public TimeSpan ChangeDelay { get; set; } = DefaultChangeDelay;
+
+    /// <summary>
+    ///   Interval of the periodic full rescan. Set before <see cref="Load" />.
+    ///   <see cref="TimeSpan.Zero" /> disables it, leaving only watcher-driven
+    ///   rescans.
+    /// </summary>
+    public TimeSpan RescanInterval { get; set; } = DefaultRescanInterval;
 
     public void Dispose()
     {
@@ -214,6 +231,16 @@ namespace NMaier.SimpleDlna.FileMediaServer
             icomparer.Equals(e.FullPath, store.StoreFile.FullName)) {
           return;
         }
+        // Directories carry no extension, so the filter below would drop them
+        // and folder add/remove would only ever be noticed by the periodic
+        // rescan. Adding or removing a folder changes the tree wholesale, so
+        // just schedule a rescan rather than trying to patch the corpus.
+        if (LooksLikeDirectory(e.FullPath)) {
+          DebugFormat(
+            "Directory changed ({1}): {0}", e.FullPath, e.ChangeType);
+          DelayedRescan(e.ChangeType);
+          return;
+        }
         var ext = string.Empty;
         if (!string.IsNullOrEmpty(e.FullPath)) {
           ext = Path.GetExtension(e.FullPath);
@@ -261,9 +288,37 @@ namespace NMaier.SimpleDlna.FileMediaServer
       }
     }
 
+    /// <summary>
+    ///   Whether a changed path is (or was) a directory.
+    /// </summary>
+    /// <remarks>
+    ///   A deleted or renamed-away path can no longer be probed, so the absence
+    ///   of an extension is the only remaining signal. Every media file this
+    ///   server serves is matched by extension, so treating extensionless paths
+    ///   as directories costs at worst one redundant rescan.
+    /// </remarks>
+    private static bool LooksLikeDirectory(string fullPath)
+    {
+      if (string.IsNullOrEmpty(fullPath)) {
+        return false;
+      }
+      if (Directory.Exists(fullPath)) {
+        return true;
+      }
+      return !File.Exists(fullPath) &&
+             string.IsNullOrEmpty(Path.GetExtension(fullPath));
+    }
+
     private void OnRenamed(object source, RenamedEventArgs e)
     {
       try {
+        if (LooksLikeDirectory(e.FullPath) ||
+            LooksLikeDirectory(e.OldFullPath)) {
+          DebugFormat(
+            "Directory renamed: {0} from {1}", e.FullPath, e.OldFullPath);
+          DelayedRescan(e.ChangeType);
+          return;
+        }
         var ext = string.Empty;
         if (!string.IsNullOrEmpty(e.FullPath)) {
           ext = Path.GetExtension(e.FullPath);
@@ -412,35 +467,19 @@ namespace NMaier.SimpleDlna.FileMediaServer
 
     internal void DelayedRescan(WatcherChangeTypes changeType)
     {
+      // A rescan is already pending; further changes ride along with it rather
+      // than pushing it further out. This is the only thrash protection needed:
+      // a burst of a thousand events still results in exactly one rescan,
+      // ChangeDelay after the first of them.
       if (changeTimer.Enabled) {
         return;
       }
-      switch (changeType) {
-      case WatcherChangeTypes.Deleted:
-        changeTimer.Interval = changeDeleteTime;
-        break;
-      case WatcherChangeTypes.Renamed:
-        changeTimer.Interval = changeRenamedTime;
-        break;
-      default:
-        changeTimer.Interval = changeDefaultTime;
-        break;
-      }
-      var diff = DateTime.Now - lastChanged;
-      if (diff.TotalSeconds <= 30) {
-        changeTimer.Interval = Math.Max(
-          TimeSpan.FromSeconds(20).TotalMilliseconds,
-          changeTimer.Interval
-          );
-        InfoFormat("Avoid thrashing {0}", changeTimer.Interval);
-      }
+      changeTimer.Interval = Math.Max(
+        ChangeDelay.TotalMilliseconds, 100);
       DebugFormat(
-        "Change in {0} on {1}",
-        changeTimer.Interval,
-        FriendlyName
-        );
+        "Rescanning {0} in {1}ms ({2})",
+        FriendlyName, changeTimer.Interval, changeType);
       changeTimer.Enabled = true;
-      lastChanged = DateTime.Now;
     }
 
     internal Cover GetCover(BaseFile file)
@@ -507,8 +546,14 @@ namespace NMaier.SimpleDlna.FileMediaServer
         watcher.EnableRaisingEvents = true;
       }
 
-      watchTimer.Elapsed += RescanTimer;
-      watchTimer.Enabled = true;
+      if (RescanInterval > TimeSpan.Zero) {
+        watchTimer.Interval = RescanInterval.TotalMilliseconds;
+        watchTimer.Elapsed += RescanTimer;
+        watchTimer.Enabled = true;
+      }
+      else {
+        Info("Periodic rescanning disabled; relying on the file watchers");
+      }
     }
 
     public void SetCacheFile(FileInfo info)

@@ -45,6 +45,22 @@ Deserialization gets context through `StreamingContext.Context`, which carries a
 `DeserializeInfo` (`DeserializeInfo.cs`) holding the server, `FileInfo` and mime
 type — that is how a deserialized item gets reattached to a live file.
 
+## Change detection
+
+`FileServer` watches every mounted directory with a `FileSystemWatcher` and
+debounces into a single rescan (`ChangeDelay`, default 5s). `RescanInterval`
+(default 30min, `Zero` disables) is only a safety net for changes the watcher
+cannot see, such as edits on a network share.
+
+`OnChanged`/`OnRenamed` filter by file extension, and a directory has none, so
+directory events must be short-circuited through `LooksLikeDirectory` *before*
+the filter. Forgetting that is what made folder add/remove invisible until the
+periodic rescan fired — for up to half an hour.
+
+Every rescan raises `Changed`, which is what `MediaMount` turns into a UPnP
+NOTIFY. Breaking that event chain silently stops clients from refreshing, and
+nothing in the server logs will look wrong.
+
 ## Gotchas
 
 - `Files/ImageFile.cs` can log an `InvalidOperationException` out of

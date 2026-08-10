@@ -34,6 +34,13 @@ namespace NMaier.SimpleDlna.Server
 
     private readonly Timer timeouter = new Timer(10 * 1000);
 
+    /// <summary>
+    ///   Tracks what is currently being streamed. Shared by every mount, so a
+    ///   consumer only needs one subscription regardless of how many servers
+    ///   are mounted.
+    /// </summary>
+    public PlaybackMonitor Playback { get; } = new PlaybackMonitor();
+
     public HttpServer()
       : this(0)
     {
@@ -92,6 +99,7 @@ namespace NMaier.SimpleDlna.Server
       }
       ssdpServer.Dispose();
       timeouter.Dispose();
+      Playback.Dispose();
       listener.Stop();
       foreach (var c in clients.ToList()) {
         c.Key.Dispose();
@@ -295,6 +303,8 @@ namespace NMaier.SimpleDlna.Server
 
       MediaMount ignored;
       if (servers.TryRemove(server.UUID, out ignored)) {
+        // Releases the mount's event subscriptions and its Changed handler.
+        ignored.Dispose();
         InfoFormat("Unregistered Media Server {0}", server.UUID);
       }
     }

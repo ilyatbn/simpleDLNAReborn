@@ -1,0 +1,1 @@
+dotnet build sdlna.sln --nologo -v q 2>&1

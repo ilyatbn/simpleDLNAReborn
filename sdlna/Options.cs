@@ -47,6 +47,14 @@ namespace NMaier.SimpleDlna
 
     [Argument("no-rescanning", HelpText = "Disable rescanning of locations after first scan")] [FlagArgument(false)] public bool Rescanning = true;
 
+    [Argument("rescan-delay", HelpVar = "seconds",
+      HelpText = "Wait this long after a file or folder change before rescanning (default: 5)")] public int RescanDelay
+      = 5;
+
+    [Argument("rescan-interval", HelpVar = "minutes",
+      HelpText = "Full rescan interval, a safety net for changes the watcher misses; 0 disables (default: 30)")] public
+      int RescanInterval = 30;
+
     [Argument("seperate", HelpText = "Mount directories as seperate servers")] [FlagArgument(true)] public bool Seperate
       = false;
 

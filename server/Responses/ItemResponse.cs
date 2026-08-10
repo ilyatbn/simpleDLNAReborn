@@ -5,16 +5,19 @@ using NMaier.SimpleDlna.Utilities;
 
 namespace NMaier.SimpleDlna.Server
 {
-  internal sealed class ItemResponse : Logging, IResponse
+  internal sealed class ItemResponse : Logging, IMediaStreamResponse
   {
     private readonly Headers headers;
 
     private readonly IMediaResource item;
 
+    private readonly string transferMode;
+
     public ItemResponse(string prefix, IRequest request, IMediaResource item,
       string transferMode = "Streaming")
     {
       this.item = item;
+      this.transferMode = transferMode;
       headers = new ResponseHeaders(!(item is IMediaCoverResource));
       var meta = item as IMetaInfo;
       if (meta != null) {
@@ -65,5 +68,17 @@ namespace NMaier.SimpleDlna.Server
     public IHeaders Headers => headers;
 
     public HttpCode Status { get; } = HttpCode.Ok;
+
+    public IMediaResource MediaItem => item;
+
+    /// <summary>
+    ///   Covers are fetched as "Interactive" and subtitles as "Background", so
+    ///   only a "Streaming" transfer of audio or video counts. Images are
+    ///   excluded deliberately: a photo slideshow should not, for instance,
+    ///   hold the machine awake.
+    /// </summary>
+    public bool IsPlayback => transferMode == "Streaming" &&
+                              (item.MediaType == DlnaMediaTypes.Video ||
+                               item.MediaType == DlnaMediaTypes.Audio);
   }
 }

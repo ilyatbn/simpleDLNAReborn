@@ -7,6 +7,7 @@ using log4net.Core;
 using NMaier.SimpleDlna.FileMediaServer;
 using NMaier.SimpleDlna.Server;
 using NMaier.SimpleDlna.Server.Comparers;
+using NMaier.SimpleDlna.GUI.Properties;
 
 namespace NMaier.SimpleDlna.GUI
 {
@@ -93,7 +94,12 @@ namespace NMaier.SimpleDlna.GUI
         }
         fileServer = new FileServer(Description.Types, ids, dirs)
         {
-          FriendlyName = Description.Name
+          FriendlyName = Description.Name,
+          ChangeDelay = TimeSpan.FromSeconds(
+            (double)Settings.Default.rescandelay),
+          // 0 means "watcher only"; FileServer reads Zero as disabled.
+          RescanInterval = TimeSpan.FromMinutes(
+            (double)Settings.Default.rescaninterval)
         };
 #if !DEBUG
         if (cacheFile != null) {

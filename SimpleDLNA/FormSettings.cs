@@ -17,6 +17,15 @@ namespace NMaier.SimpleDlna.GUI
       InitializeComponent();
       Icon = Resources.preferencesIcon;
 
+      // Populated in code rather than data-bound: a DropDownList bound through
+      // SelectedItem silently keeps the old value when the stored string is not
+      // in the list, which would hide a corrupt setting.
+      comboLogLevel.Items.AddRange(FormMain.LogLevels);
+      var level = Settings.Default.loglevel;
+      comboLogLevel.SelectedItem = comboLogLevel.Items.Contains(level)
+        ? level
+        : FormMain.DefaultLogLevel;
+
       if (!SystemInformation.IsRunningOnMono()) {
         startUpUtilities = new StartupUtilities(StartupUtilities.StartupUserScope.CurrentUser);
         checkAutoStart.Checked = startUpUtilities.CheckIfRunAtWinBoot(APP_KEY_NAME);
@@ -31,6 +40,13 @@ namespace NMaier.SimpleDlna.GUI
       if (folderBrowserDialog.ShowDialog() == DialogResult.OK) {
         textCacheFile.Text = folderBrowserDialog.SelectedPath;
       }
+    }
+
+    private void comboLogLevel_SelectedIndexChanged(object sender, EventArgs e)
+    {
+      // FormMain saves the settings and reconfigures logging once the dialog
+      // closes.
+      Settings.Default.loglevel = (string)comboLogLevel.SelectedItem;
     }
 
     private void checkAutoStart_CheckedChanged(object sender, EventArgs e)

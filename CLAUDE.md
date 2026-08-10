@@ -10,6 +10,18 @@ dotnet build sdlna.sln
 dotnet run --project sdlna/sdlna.csproj -- --help
 ```
 
+Or via the `Makefile`, which publishes into `dist/`:
+
+```
+make                          # both apps -> dist/console, dist/gui
+make run ARGS="--help"
+make build SELF_CONTAINED=false   # 6 MB instead of 83 MB, needs the runtime
+make zip                      # timestamped zips in dist/
+make help
+```
+
+`make` is not bundled with Git for Windows — `winget install ezwinports.make`.
+
 No Visual Studio needed — the .NET SDK alone is enough. CI is
 `.github/workflows/build-release.yml`, which publishes self-contained win-x64
 zips and cuts a release tagged `simpledlna-<UTC timestamp>`.

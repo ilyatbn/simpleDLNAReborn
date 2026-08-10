@@ -18,6 +18,7 @@ nothing in the repo. Keep it that way.
 | File size / duration formatting, title stemming | `Formatting.cs` |
 | LRU cache used for covers and thumbnails | `LeastRecentlyUsedDictionary.cs` |
 | Assembly title/version/copyright readback | `ProductInformation.cs` |
+| Keep the machine awake | `SleepInhibitor.cs` |
 
 ## Gotchas
 
@@ -31,6 +32,9 @@ nothing in the repo. Keep it that way.
 - `HttpStream.cs` uses `WebRequest`, which is obsolete (SYSLIB0014, suppressed
   repo-wide). Still functional; a rewrite onto `HttpClient` is a real change,
   not a mechanical one, because the class depends on synchronous seek/read.
+- `SleepInhibitor` owns a dedicated thread on purpose: `SetThreadExecutionState`
+  is *thread scoped*, so asserting it from a thread-pool thread silently stops
+  working when that thread is recycled. Do not "simplify" it to a direct call.
 - This project is the one place that should stay free of `System.Windows.Forms`.
   `Ffmpeg.cs` does pull in `System.Drawing` for `Size`, which is what forces the
   `-windows` TFM down the whole chain.

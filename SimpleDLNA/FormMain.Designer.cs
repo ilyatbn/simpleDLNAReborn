@@ -21,8 +21,6 @@
           httpServer.Dispose();
           httpServer = null;
         }
-        if (appenderTimer != null)
-          appenderTimer.Dispose();
       }
       base.Dispose(disposing);
     }
@@ -64,6 +62,9 @@
       this.fileToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
       this.newServerToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
       this.settingsToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+      this.preventSleepToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+      this.statusStrip = new System.Windows.Forms.StatusStrip();
+      this.statusPlayback = new System.Windows.Forms.ToolStripStatusLabel();
       this.toolStripMenuItem2 = new System.Windows.Forms.ToolStripSeparator();
       this.openInBrowserToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
       this.toolStripMenuItem3 = new System.Windows.Forms.ToolStripSeparator();
@@ -74,14 +75,11 @@
       this.helpToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
       this.homepageToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
       this.aboutToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
-      this.logger = new System.Windows.Forms.ListView();
-      this.colLogTime = ((System.Windows.Forms.ColumnHeader)(new System.Windows.Forms.ColumnHeader()));
-      this.colLogLogger = ((System.Windows.Forms.ColumnHeader)(new System.Windows.Forms.ColumnHeader()));
-      this.colLogMessage = ((System.Windows.Forms.ColumnHeader)(new System.Windows.Forms.ColumnHeader()));
       this.buttonRescan = new System.Windows.Forms.Button();
       this.contextMenu.SuspendLayout();
       this.notifyContext.SuspendLayout();
       this.mainMenu.SuspendLayout();
+      this.statusStrip.SuspendLayout();
       this.SuspendLayout();
       //
       // listDescriptions
@@ -303,6 +301,7 @@
       this.fileToolStripMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
             this.newServerToolStripMenuItem,
             this.settingsToolStripMenuItem,
+            this.preventSleepToolStripMenuItem,
             this.toolStripMenuItem2,
             this.openInBrowserToolStripMenuItem,
             this.toolStripMenuItem3,
@@ -329,6 +328,14 @@
       this.settingsToolStripMenuItem.Size = new System.Drawing.Size(161, 22);
       this.settingsToolStripMenuItem.Text = "Settings";
       this.settingsToolStripMenuItem.Click += new System.EventHandler(this.settingsToolStripMenuItem_Click);
+      //
+      // preventSleepToolStripMenuItem
+      //
+      this.preventSleepToolStripMenuItem.CheckOnClick = true;
+      this.preventSleepToolStripMenuItem.Name = "preventSleepToolStripMenuItem";
+      this.preventSleepToolStripMenuItem.Size = new System.Drawing.Size(161, 22);
+      this.preventSleepToolStripMenuItem.Text = "Prevent sleep while playing";
+      this.preventSleepToolStripMenuItem.CheckedChanged += new System.EventHandler(this.preventSleepToolStripMenuItem_CheckedChanged);
       //
       // toolStripMenuItem2
       //
@@ -401,39 +408,6 @@
       this.aboutToolStripMenuItem.Text = "About";
       this.aboutToolStripMenuItem.Click += new System.EventHandler(this.aboutToolStripMenuItem_Click);
       //
-      // logger
-      //
-      this.logger.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)
-            | System.Windows.Forms.AnchorStyles.Right)));
-      this.logger.Columns.AddRange(new System.Windows.Forms.ColumnHeader[] {
-            this.colLogTime,
-            this.colLogLogger,
-            this.colLogMessage});
-      this.logger.FullRowSelect = true;
-      this.logger.HideSelection = false;
-      this.logger.Location = new System.Drawing.Point(14, 284);
-      this.logger.MultiSelect = false;
-      this.logger.Name = "logger";
-      this.logger.Size = new System.Drawing.Size(698, 170);
-      this.logger.SmallImageList = this.listImages;
-      this.logger.TabIndex = 7;
-      this.logger.UseCompatibleStateImageBehavior = false;
-      this.logger.View = System.Windows.Forms.View.Details;
-      //
-      // colLogTime
-      //
-      this.colLogTime.Text = "Time";
-      this.colLogTime.Width = 80;
-      //
-      // colLogLogger
-      //
-      this.colLogLogger.Text = "Logger";
-      //
-      // colLogMessage
-      //
-      this.colLogMessage.Text = "Message";
-      this.colLogMessage.Width = 200;
-      //
       // buttonRescan
       //
       this.buttonRescan.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
@@ -448,13 +422,30 @@
       this.buttonRescan.UseVisualStyleBackColor = true;
       this.buttonRescan.Click += new System.EventHandler(this.buttonRescan_Click);
       //
+      // statusStrip
+      //
+      this.statusStrip.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.statusPlayback});
+      this.statusStrip.Location = new System.Drawing.Point(0, 291);
+      this.statusStrip.Name = "statusStrip";
+      this.statusStrip.Size = new System.Drawing.Size(727, 22);
+      this.statusStrip.SizingGrip = false;
+      this.statusStrip.TabIndex = 8;
+      //
+      // statusPlayback
+      //
+      this.statusPlayback.Image = global::NMaier.SimpleDlna.GUI.Properties.Resources.idle;
+      this.statusPlayback.Name = "statusPlayback";
+      this.statusPlayback.Size = new System.Drawing.Size(60, 17);
+      this.statusPlayback.Text = "Nothing playing";
+      //
       // FormMain
       //
       this.AutoScaleDimensions = new System.Drawing.SizeF(7F, 15F);
       this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-      this.ClientSize = new System.Drawing.Size(727, 468);
+      this.ClientSize = new System.Drawing.Size(727, 313);
+      this.Controls.Add(this.statusStrip);
       this.Controls.Add(this.buttonRescan);
-      this.Controls.Add(this.logger);
       this.Controls.Add(this.mainMenu);
       this.Controls.Add(this.buttonRemove);
       this.Controls.Add(this.buttonStartStop);
@@ -473,6 +464,8 @@
       this.notifyContext.ResumeLayout(false);
       this.mainMenu.ResumeLayout(false);
       this.mainMenu.PerformLayout();
+      this.statusStrip.ResumeLayout(false);
+      this.statusStrip.PerformLayout();
       this.ResumeLayout(false);
       this.PerformLayout();
 
@@ -502,13 +495,12 @@
     private System.Windows.Forms.ToolStripMenuItem aboutToolStripMenuItem;
     private System.Windows.Forms.ToolStripMenuItem openInBrowserToolStripMenuItem;
     private System.Windows.Forms.ToolStripSeparator toolStripMenuItem3;
-    private System.Windows.Forms.ListView logger;
-    private System.Windows.Forms.ColumnHeader colLogMessage;
-    private System.Windows.Forms.ColumnHeader colLogLogger;
     private System.Windows.Forms.ImageList listImages;
     private System.Windows.Forms.ToolStripMenuItem settingsToolStripMenuItem;
+    private System.Windows.Forms.ToolStripMenuItem preventSleepToolStripMenuItem;
+    private System.Windows.Forms.StatusStrip statusStrip;
+    private System.Windows.Forms.ToolStripStatusLabel statusPlayback;
     private System.Windows.Forms.Button buttonRescan;
-    private System.Windows.Forms.ColumnHeader colLogTime;
     private System.Windows.Forms.ToolStripMenuItem dropCacheToolStripMenuItem;
     private System.Windows.Forms.ToolStripSeparator toolStripMenuItem4;
     private System.Windows.Forms.ToolStripMenuItem homepageToolStripMenuItem;

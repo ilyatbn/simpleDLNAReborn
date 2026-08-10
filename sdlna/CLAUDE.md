@@ -11,6 +11,7 @@ Thin shell: parse options, build a `FileServer`, register it with an
 | `Main`, server wiring, shutdown | `Program.cs` |
 | Every command line flag, plus log4net setup | `Options.cs` |
 | Console window icon (Win32) | `ProgramIcon.cs`, `SafeNativeMethods.cs` |
+| Rescan tuning | `--rescan-delay=SECONDS`, `--rescan-interval=MINUTES` (0 disables the periodic pass) |
 | Embedded LICENSE shown by `--license` | `Properties/Resources.resx` → `Resources/LICENSE` |
 
 ## Adding a command line option

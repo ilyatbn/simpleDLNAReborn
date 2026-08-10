@@ -62,15 +62,27 @@ namespace NMaier.SimpleDlna.GUI.Properties {
         [global::System.Configuration.UserScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
         [global::System.Configuration.DefaultSettingValueAttribute("False")]
-        public bool filelogging {
+        public bool preventsleep {
             get {
-                return ((bool)(this["filelogging"]));
+                return ((bool)(this["preventsleep"]));
             }
             set {
-                this["filelogging"] = value;
+                this["preventsleep"] = value;
             }
         }
-        
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("Error")]
+        public string loglevel {
+            get {
+                return ((string)(this["loglevel"]));
+            }
+            set {
+                this["loglevel"] = value;
+            }
+        }
+
         [global::System.Configuration.UserScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
         [global::System.Configuration.DefaultSettingValueAttribute("False")]
@@ -80,6 +92,30 @@ namespace NMaier.SimpleDlna.GUI.Properties {
             }
             set {
                 this["startminimized"] = value;
+            }
+        }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("5")]
+        public decimal rescandelay {
+            get {
+                return ((decimal)(this["rescandelay"]));
+            }
+            set {
+                this["rescandelay"] = value;
+            }
+        }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("30")]
+        public decimal rescaninterval {
+            get {
+                return ((decimal)(this["rescaninterval"]));
+            }
+            set {
+                this["rescaninterval"] = value;
             }
         }
     }

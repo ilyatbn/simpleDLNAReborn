@@ -14,6 +14,7 @@ namespace NMaier.SimpleDlna.Server
         {HttpCode.TemporaryRedirect, "Temprary Redirect"},
         {HttpCode.Denied, "Forbidden"},
         {HttpCode.NotFound, "Not Found"},
+        {HttpCode.PreconditionFailed, "Precondition Failed"},
         {HttpCode.RangeNotSatisfiable, "Requested Range not satisfiable"},
         {HttpCode.InternalError, "Internal Server Error"}
       };
