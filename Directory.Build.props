@@ -1,0 +1,59 @@
+<Project>
+
+  <!-- Settings shared by every project in the repo. Previously these lived in
+       GlobalAssemblyInfo.cs plus a copy/pasted block in each legacy .csproj. -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Platforms>AnyCPU</Platforms>
+    <AppendTargetFrameworkToOutputPath>true</AppendTargetFrameworkToOutputPath>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <!-- Assembly metadata (was GlobalAssemblyInfo.cs). The legacy build used an
+       AssemblyVersion of "1.2.*", which SDK-style deterministic builds reject;
+       CI overrides Version with a build-stamped value instead. -->
+  <PropertyGroup>
+    <Company>Nils Maier</Company>
+    <Product>SimpleDLNA</Product>
+    <Copyright>Copyright © 2012-2016 Nils Maier</Copyright>
+    <NeutralLanguage>en-US</NeutralLanguage>
+    <VersionPrefix>1.2.0</VersionPrefix>
+    <AssemblyVersion>1.2.0.0</AssemblyVersion>
+  </PropertyGroup>
+
+  <!-- Was [assembly: CLSCompliant(true)] / [assembly: ComVisible(false)] in
+       GlobalAssemblyInfo.cs; the SDK has no properties for these. -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.CLSCompliantAttribute">
+      <_Parameter1>true</_Parameter1>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.InteropServices.ComVisibleAttribute">
+      <_Parameter1>false</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <PropertyGroup>
+    <SignAssembly>true</SignAssembly>
+    <AssemblyOriginatorKeyFile>$(MSBuildThisFileDirectory)sdlna.key.snk</AssemblyOriginatorKeyFile>
+  </PropertyGroup>
+
+  <!-- The legacy projects were built with warnings-as-information; a 15 year old
+       code base trips a lot of modern analyzers and obsoletion warnings that are
+       not actionable here. Suppress the noisy ones rather than the whole set.
+         CA1416  - System.Drawing/WinForms are Windows-only (project is net*-windows)
+         SYSLIB0014 - WebRequest/WebClient are obsolete
+         SYSLIB0050/0051 - the ISerializable + SerializationInfo pattern is
+                           deprecated along with BinaryFormatter, but it is still
+                           supported and is what fsserver\ItemSerializer.cs is
+                           deliberately built on
+         CS0618/CS0612 - other obsolete API use -->
+  <PropertyGroup>
+    <NoWarn>$(NoWarn);CA1416;SYSLIB0014;SYSLIB0050;SYSLIB0051;CS0618;CS0612</NoWarn>
+  </PropertyGroup>
+
+</Project>

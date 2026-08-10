@@ -29,7 +29,24 @@ namespace NMaier.SimpleDlna.Utilities
 
     private void Finish(StreamPumpResult result, StreamPumpCallback callback)
     {
-      callback?.BeginInvoke(this, result, callback.EndInvoke, null);
+      if (callback != null) {
+        // Was callback.BeginInvoke(...). Asynchronous delegate invocation only
+        // ever worked on .NET Framework (it needs remoting) and throws
+        // PlatformNotSupportedException elsewhere. Queueing the call gives the
+        // same thing BeginInvoke bought us: the callback runs on the pool
+        // rather than on this I/O completion thread, and it does not block the
+        // sem.Release() below.
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+          try {
+            callback(this, result);
+          }
+          catch (Exception ex) {
+            LogManager.GetLogger(typeof (StreamPump)).Error(
+              "Stream pump callback failed", ex);
+          }
+        });
+      }
       try {
         sem.Release();
       }

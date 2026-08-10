@@ -29,7 +29,22 @@ namespace NMaier.SimpleDlna.Thumbnails
           continue;
         }
         var ctor = t.GetConstructor(new Type[] {});
-        var thumber = ctor?.Invoke(new object[] {}) as IThumbnailLoader;
+        if (ctor == null) {
+          continue;
+        }
+        IThumbnailLoader thumber;
+        try {
+          thumber = ctor.Invoke(new object[] {}) as IThumbnailLoader;
+        }
+        catch (TargetInvocationException ex) {
+          // A loader declines by throwing from its constructor - the video
+          // loader does exactly that when ffmpeg is not installed. Without this
+          // the whole static ctor fails and *no* thumbnails work at all.
+          LogManager.GetLogger(typeof (ThumbnailMaker)).InfoFormat(
+            "Thumbnailer {0} unavailable: {1}",
+            t.Name, (ex.InnerException ?? ex).Message);
+          continue;
+        }
         if (thumber == null) {
           continue;
         }

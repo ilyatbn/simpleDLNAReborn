@@ -34,8 +34,12 @@ namespace NMaier.Windows.Forms
         true);
     }
 
+    // Derived from the ambient Font at construction time, so there is nothing
+    // for the designer to serialize (WFO1000).
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public virtual Font BoldFont { get; set; }
 
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public virtual Font ItalicFont { get; set; }
 
     public static void SetFlatStyle(object control)

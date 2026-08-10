@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Globalization;
 using System.IO;
+using System.Runtime.Serialization;
 using System.Text;
 using log4net;
 using NMaier.SimpleDlna.Utilities;
@@ -8,7 +9,7 @@ using NMaier.SimpleDlna.Utilities;
 namespace NMaier.SimpleDlna.Server
 {
   [Serializable]
-  public sealed class Subtitle : IMediaResource
+  public sealed class Subtitle : IMediaResource, ISerializable
   {
     [NonSerialized] private static readonly ILog logger =
       LogManager.GetLogger(typeof (Subtitle));
@@ -38,6 +39,23 @@ namespace NMaier.SimpleDlna.Server
     public Subtitle(string text)
     {
       this.text = text;
+    }
+
+    private Subtitle(SerializationInfo info, StreamingContext ctx)
+    {
+      text = info.GetString("t");
+    }
+
+    /// <summary>
+    ///   Only the subtitle text is persisted; everything else is either derived
+    ///   or reloaded from disk. Used by the file store cache.
+    /// </summary>
+    public void GetObjectData(SerializationInfo info, StreamingContext ctx)
+    {
+      if (info == null) {
+        throw new ArgumentNullException(nameof(info));
+      }
+      info.AddValue("t", text);
     }
 
     public bool HasSubtitle => !string.IsNullOrWhiteSpace(text);

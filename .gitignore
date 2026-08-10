@@ -3,6 +3,11 @@ util/x64
 packages/
 */bin
 */obj
+bin/
+obj/
+publish/
+dist/
+artifacts/
 *.suo
 *.user
 *.DotSettings

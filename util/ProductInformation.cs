@@ -54,8 +54,7 @@ namespace NMaier.SimpleDlna.Utilities
             return titleAttribute.Title;
           }
         }
-        return Path.GetFileNameWithoutExtension(
-          Assembly.GetExecutingAssembly().CodeBase);
+        return Assembly.GetExecutingAssembly().GetName().Name;
       }
     }
   }

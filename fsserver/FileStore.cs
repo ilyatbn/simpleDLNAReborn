@@ -4,8 +4,6 @@ using System.Data.Common;
 using System.IO;
 using System.Reflection;
 using System.Runtime.Serialization;
-using System.Runtime.Serialization.Formatters;
-using System.Runtime.Serialization.Formatters.Binary;
 using System.Threading;
 using NMaier.SimpleDlna.Server;
 using NMaier.SimpleDlna.Utilities;
@@ -14,7 +12,9 @@ namespace NMaier.SimpleDlna.FileMediaServer
 {
   internal sealed class FileStore : Logging, IDisposable
   {
-    private const uint SCHEMA = 0x20160618;
+    // Bumped when the cache payload format changes; a mismatch drops the file
+    // and rescans. 0x20160618 was the last BinaryFormatter-based revision.
+    private const uint SCHEMA = 0x20260810;
 
     private static readonly FileStoreVacuumer vacuumer =
       new FileStoreVacuumer();
@@ -232,13 +232,7 @@ namespace NMaier.SimpleDlna.FileMediaServer
             StreamingContextStates.Persistence,
             new DeserializeInfo(null, info, DlnaMime.ImageJPEG)
             );
-          var formatter = new BinaryFormatter(null, ctx)
-          {
-            TypeFormat = FormatterTypeStyle.TypesWhenNeeded,
-            AssemblyFormat = FormatterAssemblyStyle.Simple
-          };
-          var rv = formatter.Deserialize(s) as Cover;
-          return rv;
+          return ItemSerializer.Deserialize(s, ctx) as Cover;
         }
       }
       catch (SerializationException ex) {
@@ -283,12 +277,7 @@ namespace NMaier.SimpleDlna.FileMediaServer
           var ctx = new StreamingContext(
             StreamingContextStates.Persistence,
             new DeserializeInfo(server, info, type));
-          var formatter = new BinaryFormatter(null, ctx)
-          {
-            TypeFormat = FormatterTypeStyle.TypesWhenNeeded,
-            AssemblyFormat = FormatterAssemblyStyle.Simple
-          };
-          var rv = formatter.Deserialize(s) as BaseFile;
+          var rv = ItemSerializer.Deserialize(s, ctx) as BaseFile;
           if (rv == null) {
             throw new SerializationException("Deserialized as null");
           }
@@ -310,27 +299,18 @@ namespace NMaier.SimpleDlna.FileMediaServer
       if (connection == null) {
         return;
       }
-      if (!file.GetType().Attributes.HasFlag(TypeAttributes.Serializable)) {
+      if (!ItemSerializer.CanSerialize(file)) {
         return;
       }
       try {
         using (var s = StreamManager.GetStream()) {
           using (var c = StreamManager.GetStream()) {
-            var ctx = new StreamingContext(
-              StreamingContextStates.Persistence,
-              null
-              );
-            var formatter = new BinaryFormatter(null, ctx)
-            {
-              TypeFormat = FormatterTypeStyle.TypesWhenNeeded,
-              AssemblyFormat = FormatterAssemblyStyle.Simple
-            };
-            formatter.Serialize(s, file);
+            ItemSerializer.Serialize(s, file);
             Cover cover = null;
             try {
               cover = file.MaybeGetCover();
               if (cover != null) {
-                formatter.Serialize(c, cover);
+                ItemSerializer.Serialize(c, cover);
               }
             }
             catch (NotSupportedException) {

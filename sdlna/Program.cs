@@ -68,7 +68,11 @@ namespace NMaier.SimpleDlna
       Console.WriteLine();
       var options = new Options();
       try {
-        Console.TreatControlCAsInput = false;
+        // Throws on .NET when there is no real console attached (redirected
+        // output, service host, scheduled task); the default is false anyway.
+        if (!Console.IsInputRedirected) {
+          Console.TreatControlCAsInput = false;
+        }
         Console.CancelKeyPress += CancelKeyPressed;
 
         options.Parse(args);

@@ -264,7 +264,9 @@ namespace NMaier.SimpleDlna.Utilities
       else {
         if (response != null && off > 0 && off < SMALL_SEEK) {
           var buf = new byte[off];
-          bufferedStream.Read(buf, 0, (int)off);
+          // Read, not ReadExactly, would happily return short and leave the
+          // stream position out of sync with `position` below.
+          bufferedStream.ReadExactly(buf, 0, (int)off);
           logger.DebugFormat("Did a small seek of {0}", off);
         }
         else {
