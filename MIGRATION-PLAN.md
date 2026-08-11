@@ -14,7 +14,7 @@
 - [x] **Step 2** — REST API design → `modernization.md` §2
       *(deviates from §4 Step 2 below: a dedicated admin listener, not
       reuse of `server/Http`. Rationale in `modernization.md` §2.1.)*
-- [ ] **Step 3** — SPA design → `modernization.md` §3
+- [x] **Step 3** — SPA design → `modernization.md` §3
 - [ ] **Step 4** — WinForms deprecation + build integration → `modernization.md` §4
 
 ---
