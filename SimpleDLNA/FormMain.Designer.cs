@@ -67,6 +67,7 @@
       this.statusPlayback = new System.Windows.Forms.ToolStripStatusLabel();
       this.toolStripMenuItem2 = new System.Windows.Forms.ToolStripSeparator();
       this.openInBrowserToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+      this.openLogFolderToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
       this.toolStripMenuItem3 = new System.Windows.Forms.ToolStripSeparator();
       this.dropCacheToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
       this.toolStripMenuItem4 = new System.Windows.Forms.ToolStripSeparator();
@@ -304,6 +305,7 @@
             this.preventSleepToolStripMenuItem,
             this.toolStripMenuItem2,
             this.openInBrowserToolStripMenuItem,
+            this.openLogFolderToolStripMenuItem,
             this.toolStripMenuItem3,
             this.dropCacheToolStripMenuItem,
             this.toolStripMenuItem4,
@@ -349,6 +351,13 @@
       this.openInBrowserToolStripMenuItem.Size = new System.Drawing.Size(161, 22);
       this.openInBrowserToolStripMenuItem.Text = "Open in Browser";
       this.openInBrowserToolStripMenuItem.Click += new System.EventHandler(this.openInBrowserToolStripMenuItem_Click);
+      //
+      // openLogFolderToolStripMenuItem
+      //
+      this.openLogFolderToolStripMenuItem.Name = "openLogFolderToolStripMenuItem";
+      this.openLogFolderToolStripMenuItem.Size = new System.Drawing.Size(161, 22);
+      this.openLogFolderToolStripMenuItem.Text = "Open Log Folder";
+      this.openLogFolderToolStripMenuItem.Click += new System.EventHandler(this.openLogFolderToolStripMenuItem_Click);
       //
       // toolStripMenuItem3
       //
@@ -494,6 +503,7 @@
     private System.Windows.Forms.ToolStripMenuItem helpToolStripMenuItem;
     private System.Windows.Forms.ToolStripMenuItem aboutToolStripMenuItem;
     private System.Windows.Forms.ToolStripMenuItem openInBrowserToolStripMenuItem;
+    private System.Windows.Forms.ToolStripMenuItem openLogFolderToolStripMenuItem;
     private System.Windows.Forms.ToolStripSeparator toolStripMenuItem3;
     private System.Windows.Forms.ImageList listImages;
     private System.Windows.Forms.ToolStripMenuItem settingsToolStripMenuItem;

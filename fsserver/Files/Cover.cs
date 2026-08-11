@@ -65,6 +65,17 @@ namespace NMaier.SimpleDlna.FileMediaServer
       }
     }
 
+    /// <summary>
+    ///   Whether this cover actually holds image data right now.
+    /// </summary>
+    /// <remarks>
+    ///   Reads the field rather than <see cref="Bytes" /> on purpose: the
+    ///   property calls <see cref="ForceLoad" />, which would re-attempt
+    ///   thumbnail generation. Callers use this to avoid asking a coverless
+    ///   Cover to serialize itself, which throws from GetObjectData.
+    /// </remarks>
+    internal bool HasData => bytes != null && bytes.Length > 0;
+
     IMediaCoverResource IMediaCover.Cover => this;
 
     public string Id

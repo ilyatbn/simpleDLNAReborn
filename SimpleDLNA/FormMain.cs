@@ -476,7 +476,40 @@ namespace NMaier.SimpleDlna.GUI
     private void openInBrowserToolStripMenuItem_Click(object sender,
       EventArgs e)
     {
-      Process.Start($"http://localhost:{httpServer.RealPort}/");
+      Shell($"http://localhost:{httpServer.RealPort}/");
+    }
+
+    private void openLogFolderToolStripMenuItem_Click(object sender,
+      EventArgs e)
+    {
+      Shell(CacheDir);
+    }
+
+    /// <summary>
+    ///   Hands a URL or path to the shell to open with whatever is registered
+    ///   for it.
+    /// </summary>
+    /// <remarks>
+    ///   UseShellExecute must be set explicitly: it defaulted to true on .NET
+    ///   Framework but defaults to false on .NET, where passing a URL or a
+    ///   directory to Process.Start throws Win32Exception instead of opening
+    ///   anything.
+    /// </remarks>
+    private void Shell(string target)
+    {
+      try {
+        using (Process.Start(new ProcessStartInfo(target)
+        {
+          UseShellExecute = true
+        })) {
+        }
+      }
+      catch (Exception ex) {
+        log.Error($"Failed to open {target}", ex);
+        MessageBox.Show(
+          this, $"Could not open {target}\n\n{ex.Message}", "Error",
+          MessageBoxButtons.OK, MessageBoxIcon.Error);
+      }
     }
 
     private void rescanAllContextMenuItem_Click(object sender, EventArgs e)

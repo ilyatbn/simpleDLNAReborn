@@ -1,5 +1,8 @@
 0 - fix current bugs
+- move away from the c# webforms
+    - webserver
+    - rest api for everything in the gui
+    - modern web ui.
 
-Add a "restart server" command like simpledlna /reload
-reload server on network change (vpn)
-add a rest api to stop,start,reload servers, add/delete folders for videos.
+- "restart server" button
+- reload server on network change (vpn)

@@ -38,6 +38,19 @@ was removed from the runtime in .NET 9. It keeps the `ISerializable` /
 - **Any change to a `GetObjectData` payload requires bumping `FileStore.SCHEMA`**,
   which drops and rebuilds existing cache files. Skipping this hands stale
   payloads to a constructor that no longer expects them.
+- `Serialize` builds the record in a scratch buffer and only then copies it to
+  the destination. Writing straight through would leave the magic header in the
+  stream when `GetObjectData` throws, and a caller that persisted those bytes
+  would create a record that fails to deserialize forever.
+- **A cover is only persisted when it actually has bytes** (`Cover.HasData`).
+  `Cover.GetObjectData` throws when it holds none — which is the normal case for
+  videos on a machine without ffmpeg — and storing the result anyway is what
+  produced 138 FATALs' worth of truncated records.
+- **A damaged record is a cache miss, never an exception.** Both `MaybeGetFile`
+  and `MaybeGetCover` log at Debug and return null; `MaybeGetCover` also calls
+  `ClearCover` so the bad row heals itself. That last part is required because
+  the INSERT's `COALESCE` deliberately preserves an existing cover blob when the
+  new one is null, so re-storing the item cannot clear it.
 - The type tag strings in `ItemSerializer.Types` are persisted. Never reuse a
   tag for a different type.
 

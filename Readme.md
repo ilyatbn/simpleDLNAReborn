@@ -1,6 +1,10 @@
-SimpleDLNA
+SimplerDLNA
 ===
-A simple, zero-config DLNA media server, that you can just fire up and be done with it.
+SimpleDLNA, better, faster, stronger.
 
-
-See [the github page](http://nmaier.github.io/simpleDLNA/) for more details and downloads.
+Main changes:
+- upgraded to .net framework 10
+- way better performance.
+- fully portable.
+- implemented proper refreshing mechanisms for changes in folders. 
+- other bug fixes and ui changes.

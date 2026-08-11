@@ -235,13 +235,44 @@ namespace NMaier.SimpleDlna.FileMediaServer
           return ItemSerializer.Deserialize(s, ctx) as Cover;
         }
       }
-      catch (SerializationException ex) {
-        Debug("Failed to deserialize a cover", ex);
+      catch (Exception ex) {
+        // A cover is regenerable by definition, so a damaged record is just a
+        // cache miss - never a reason to fail the request that triggered it.
+        // Clear the blob so the row stops costing a failed deserialize on
+        // every access; the next successful thumbnail will fill it back in.
+        Debug("Discarding a damaged cover record", ex);
+        ClearCover(info.FullName);
         return null;
       }
-      catch (Exception ex) {
-        Fatal("Failed to deserialize a cover", ex);
-        throw;
+    }
+
+    /// <summary>
+    ///   Drops just the cover of a row, keeping the item payload.
+    /// </summary>
+    /// <remarks>
+    ///   Needed because the INSERT deliberately COALESCEs a null cover with
+    ///   whatever is already stored, so re-storing the item cannot clear a bad
+    ///   blob - it would be preserved forever.
+    /// </remarks>
+    private void ClearCover(string key)
+    {
+      if (connection == null) {
+        return;
+      }
+      try {
+        lock (connection) {
+          using (var cmd = connection.CreateCommand()) {
+            cmd.CommandText = "UPDATE store SET cover = NULL WHERE key = ?";
+            var p = cmd.CreateParameter();
+            p.DbType = DbType.String;
+            p.Value = key;
+            cmd.Parameters.Add(p);
+            cmd.ExecuteNonQuery();
+          }
+        }
+      }
+      catch (DbException ex) {
+        Debug("Failed to clear a damaged cover", ex);
       }
     }
 
@@ -286,11 +317,11 @@ namespace NMaier.SimpleDlna.FileMediaServer
         }
       }
       catch (Exception ex) {
-        if (ex is TargetInvocationException || ex is SerializationException) {
-          Debug("Failed to deserialize an item", ex);
-          return null;
-        }
-        throw;
+        // Same reasoning as MaybeGetCover: the item is rebuilt by rescanning
+        // the file, so a damaged record must degrade to a cache miss rather
+        // than propagate out of a request.
+        Debug("Discarding a damaged item record", ex);
+        return null;
       }
     }
 
@@ -309,12 +340,24 @@ namespace NMaier.SimpleDlna.FileMediaServer
             Cover cover = null;
             try {
               cover = file.MaybeGetCover();
-              if (cover != null) {
+              if (cover != null && cover.HasData) {
                 ItemSerializer.Serialize(c, cover);
               }
+              else {
+                // Nothing to store - most commonly a video on a machine with
+                // no ffmpeg, so no thumbnail could ever be produced. Leaving
+                // cover null makes the INSERT's COALESCE keep whatever was
+                // stored before instead of overwriting it.
+                cover = null;
+              }
             }
-            catch (NotSupportedException) {
-              // Ignore and store null.
+            catch (Exception ex) {
+              // A cover that cannot be serialized must not be half-written into
+              // the store: a truncated record fails to deserialize forever
+              // after. Cover.GetObjectData throws when it holds no bytes, but
+              // anything else here is equally unstorable.
+              Debug("Not storing a cover for " + file.Item.FullName, ex);
+              cover = null;
             }
 
             lock (connection) {

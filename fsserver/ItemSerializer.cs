@@ -77,10 +77,17 @@ namespace NMaier.SimpleDlna.FileMediaServer
       if (item == null) {
         throw new ArgumentNullException(nameof(item));
       }
-      // Leave the stream open: callers pull the bytes out afterwards.
-      using (var writer = new BinaryWriter(stream, Encoding.UTF8, true)) {
-        writer.Write(MAGIC);
-        WriteObject(writer, item);
+      // Build the whole record before touching the destination. Writing
+      // straight through would leave the magic header in the stream when
+      // WriteObject throws, and a caller that persisted those few bytes would
+      // produce a record that fails to deserialize for good.
+      using (var scratch = new MemoryStream()) {
+        using (var writer = new BinaryWriter(scratch, Encoding.UTF8, true)) {
+          writer.Write(MAGIC);
+          WriteObject(writer, item);
+        }
+        scratch.Position = 0;
+        scratch.CopyTo(stream);
       }
     }
 
@@ -90,10 +97,20 @@ namespace NMaier.SimpleDlna.FileMediaServer
         throw new ArgumentNullException(nameof(stream));
       }
       using (var reader = new BinaryReader(stream, Encoding.UTF8, true)) {
-        if (reader.ReadUInt32() != MAGIC) {
-          throw new SerializationException("Not a SimpleDLNA cache record");
+        try {
+          if (reader.ReadUInt32() != MAGIC) {
+            throw new SerializationException("Not a SimpleDLNA cache record");
+          }
+          return ReadObject(reader, ctx);
         }
-        return ReadObject(reader, ctx);
+        catch (Exception ex) when (!(ex is SerializationException)) {
+          // A truncated or otherwise damaged record surfaces as whatever the
+          // BinaryReader happened to hit - EndOfStreamException, a bad length
+          // turning into ArgumentException/OverflowException, and so on.
+          // Callers treat SerializationException as "cache miss, regenerate",
+          // which is the right response to all of them.
+          throw new SerializationException("Damaged cache record", ex);
+        }
       }
     }
 
