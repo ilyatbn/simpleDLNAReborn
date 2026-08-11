@@ -8,7 +8,7 @@ this file holds the four deliverable sections.
 | --- | --- |
 | §1 GUI feature inventory | ✅ done |
 | §2 REST API design | ✅ done |
-| §3 SPA design | ⬜ not started |
+| §3 SPA design | ✅ done |
 | §4 WinForms deprecation + build integration | ⬜ not started |
 
 ---
@@ -1146,3 +1146,301 @@ Rows 16 and 19 additionally require `GET /fs` (§2.9).
 - **Restart-in-place for port / cache directory** — would need `HttpServer` to be
   disposable and re-creatable with every mount re-registered. Real work, and the
   GUI never did it either. `restartRequired` is honest in the meantime.
+
+---
+
+# §3 — Admin SPA design
+
+A React + TypeScript single-page app served from `http://localhost:19199/`,
+talking only to the §2 API. It replaces every window in §1 except the tray icon.
+
+Scope note: this is the **admin** surface. The DLNA browse UI
+(`server/Handlers/MediaMount_HTML.cs` + `server/Resources/browse.css`) is a
+different surface for a different audience and is **not** touched — it stays on
+the media port, and `GET /status` → `browseUrl` links out to it.
+
+## 3.1 Stack
+
+| Concern | Choice | Why |
+| --- | --- | --- |
+| Build | **Vite** (current stable) | Fast dev server, ES-module output, hashed filenames, trivial static build for §4 embedding |
+| Framework | **React + TypeScript** | Decided in `MIGRATION-PLAN.md` §2 |
+| Routing | **react-router** (data router) | Deep-linkable editor URLs; 5 routes total |
+| Server state | **TanStack Query** | The whole app is server state — caching, refetch and invalidation are the app's actual logic. SSE events map onto `queryClient.invalidateQueries` in one place |
+| Forms | **react-hook-form** + **zod** | The server editor is a large form with per-field validation (§1.3); zod schemas mirror §2.6.2 so errors appear before submit |
+| Styling | **CSS Modules + custom-property design tokens** | No extra build step, real light/dark theming, no runtime, tiny output |
+| Icons | Inline SVG components | No icon font, no external requests (§4 embeds everything) |
+| Tests | **Vitest** + React Testing Library | Validation schemas and state reducers are worth testing; UI smoke tests only |
+
+**No component library** (MUI, Chakra, shadcn). Five screens with ~15 components
+do not justify a design-system dependency, and the §4 bundle is embedded in the
+assembly, so size is a real constraint. Budget: **< 250 KB gzipped** total.
+
+*(If a component library is later wanted, shadcn/ui is the one that fits — it
+copies source in rather than adding a dependency. Tailwind is the alternative to
+CSS Modules; rejected only because tokens + modules need no extra tooling.)*
+
+## 3.2 Layout
+
+```
+web/
+  package.json  tsconfig.json  vite.config.ts  index.html
+  src/
+    main.tsx
+    App.tsx                    router + shell
+    api/
+      client.ts                fetch wrapper: JSON, ApiError, Content-Type
+      types.ts                 hand-mirrored from §2 schemas
+      servers.ts settings.ts status.ts capabilities.ts logs.ts fs.ts
+      events.ts                SSE → query invalidation
+    features/
+      servers/   ServerList ServerCard ServerEditor + editor sections
+      settings/  SettingsForm
+      logs/      LogViewer
+      about/     About
+    components/  Button Field Select Checkbox Modal Badge Toast
+                 ConfirmDialog DirectoryPicker EmptyState ErrorState
+    lib/         validation.ts (zod) format.ts theme.ts
+    styles/      reset.css tokens.css
+```
+
+`web/dist` is the build output. It is **already git-ignored** — `.gitignore`
+carries a bare `dist/` pattern, which matches at any depth.
+
+## 3.3 Screens
+
+| Route | Screen | Replaces |
+| --- | --- | --- |
+| `/` | Servers | `FormMain` list + buttons + context menu |
+| `/servers/new` | Server editor (create) | `FormServer` (New Server) |
+| `/servers/:id` | Server editor (edit) | `FormServer` (Edit Server) |
+| `/settings` | Settings | `FormSettings` |
+| `/logs` | Log viewer | *new* — replaces "Open Log Folder" |
+| `/about` | About | `FormAbout` |
+
+### 3.3.1 Shell
+
+Persistent across routes: product name, nav, and a status strip fed by
+`GET /status` + SSE — the media port (row 34), a playback indicator (row 26,
+`Playing: {title} — {client}` or "Nothing playing"), and an **"Open browse UI"**
+link to `browseUrl` (row 27).
+
+**Backend-down banner.** The tray app can exit while the page stays open. When a
+request fails to connect or SSE drops and does not recover, the shell shows a
+blocking banner — *"SimpleDLNA is not running"* — and retries with backoff. The
+GUI could not have this problem; the SPA must handle it or it silently lies.
+
+### 3.3.2 Servers
+
+The list is the landing screen. One row/card per server showing name, state
+badge, directory count, and — new — the mount prefix and load time when running.
+
+- **State badge** colour-coded per §2.6.1 state, with the state name as text, not
+  colour alone. `refreshing` and `loading` animate; `stopped` with a non-null
+  `lastError` shows an error badge and the message on expand — the GUI discarded
+  this (§1.9 step 11).
+- **Per-row actions**: Start/Stop (single toggle, label follows state exactly as
+  §1.2.1 does), Rescan (disabled unless `running`, per row 7), Edit, Remove.
+- **Page actions**: New server, Rescan all (reports the API's `skipped` count
+  rather than silently swallowing it, §1.11 #9).
+- **Remove** opens a confirm dialog reproducing the GUI's wording:
+  *"Would you like to remove {name}?"*
+- **Empty state** — the first-run screen, which the GUI never had: a short
+  explanation and a single "Add your first server" call to action.
+- Actions are optimistic only in so far as they set a transitional state
+  immediately; the authoritative state arrives via SSE or refetch. A `409`
+  reverts and toasts.
+
+### 3.3.3 Server editor
+
+A full route rather than a modal, so it is deep-linkable and has room. Sections
+follow §1.3 in the same order, so muscle memory survives:
+
+| Section | Control | Notes |
+| --- | --- | --- |
+| Name | text | required |
+| Order | select + "Descending" checkbox | options from `capabilities.orders`, `title` preselected |
+| Types | Video / Audio / Images checkboxes | ≥ 1 required; Video default on create |
+| Views | ordered list + add | see below |
+| Restrictions | value + type (MAC/IP/User-Agent) + list | validated client- and server-side |
+| Directories | list + **Add directory** → `DirectoryPicker` | ≥ 1 required |
+
+**Views** is where the SPA exceeds the GUI. Adding a view whose
+`capabilities.views[].configurable` is true reveals a small parameter form built
+from its `parameters` metadata (§2.5) — so `large:size=700` becomes a labelled
+"Size (MB)" number input instead of an unreachable feature (§1.11 #2). The list is
+**reorderable** (up/down buttons, keyboard-operable, drag optional) — the GUI
+shipped those buttons wired to nothing (§1.11 #1), and order is meaningful
+because `Identifiers.AddView` applies views in sequence. Duplicates are rejected
+inline (§1.11 #3).
+
+**Directory picker** is the `FolderBrowserDialog` replacement (§2.9): a modal
+tree over `GET /fs`, starting at the drive list, breadcrumb navigation, with
+manual path entry as an escape hatch for UNC paths and anything the tree cannot
+reach. Entries with `accessible: false` render disabled with a tooltip rather
+than being hidden.
+
+Validation runs on blur via zod, and the submit button stays enabled — blocking
+submit is what made the GUI's failure mode a silently un-closable dialog. A `422`
+maps `error.details[].field` onto form fields and focuses the first one.
+
+Saving an edit warns that a running server will restart (§2.2.1), because it
+will.
+
+### 3.3.4 Settings
+
+One form over `GET`/`PUT /settings`, grouped as in §1.4: Port, Cache directory
+(with a `DirectoryPicker` button), Library refresh, Logging, and startup options.
+
+- Fields whose change requires a restart are marked inline, and after a save that
+  returns a non-empty `restartRequired`, a persistent notice names them — the
+  honest version of the GUI's "(Requires restart)" tooltips.
+- `effective.port` is shown next to `port` so `0` is legible as "currently 49312".
+- `startMinimized` and `autostart` are **hidden when `status.host === "console"`**;
+  they are tray-only concepts.
+- Unlike `FormSettings`, this form has explicit **Save** and **Cancel**. The GUI's
+  commit-on-keystroke behaviour with no Cancel (§1.4) is a bug to leave behind.
+
+### 3.3.5 Logs
+
+`GET /log?tail=&level=`: level filter, tail size, auto-refresh toggle, monospace
+rows with timestamp / level / logger / message, and colour by level. Unparsed
+lines render raw so stack traces stay readable. When logging is disabled
+(`disabled: true`), the screen says so and links to Settings rather than showing
+an empty list.
+
+### 3.3.6 About
+
+Product, version and copyright from `GET /status`, the licence text, and the
+homepage link — fixing row 31, which is broken in the GUI (§1.11 #6). The licence
+is bundled into the SPA rather than served by the API; it is static text.
+
+## 3.4 API client and live updates
+
+`api/client.ts` is a thin `fetch` wrapper that sets
+`Content-Type: application/json` on mutations (required by §2.11), parses the
+§2.3.2 error envelope into a typed `ApiError { code, message, details }`, and
+throws it. Every endpoint gets a typed function plus a TanStack Query hook.
+
+Types in `api/types.ts` are **hand-mirrored** from §2, not generated — there is no
+OpenAPI document, and writing one to generate ~15 types would cost more than it
+saves. If the surface grows, emitting OpenAPI from `admin/` and generating the
+client is the upgrade path.
+
+`api/events.ts` opens `EventSource("/api/v1/events")` once at app start:
+
+| Event | Action |
+| --- | --- |
+| `servers` | `invalidateQueries(['servers'])` |
+| `playback` | `invalidateQueries(['status'])` |
+| `ping` | reset the liveness timer |
+
+If `EventSource` errors, or no `ping` arrives within 60 s, the app falls back to
+polling exactly as §2.10 specifies — 1 s while any server is `loading`/
+`refreshing`, 5 s otherwise — and keeps retrying the SSE connection. **The app is
+fully functional with SSE disabled**, which is what lets §2.10 be deferred if
+implementation runs long.
+
+## 3.5 Look and feel
+
+The DLNA browse UI is dark slate (`#22282c` on `#6c96ad`, Segoe UI —
+`browse.css:4-13`). The admin UI keeps the family so the two feel like one
+product, but is its own design: denser, light **and** dark.
+
+- **Tokens** in `styles/tokens.css` as CSS custom properties — colour, spacing,
+  radius, type scale. Dark values derive from the browse palette; a proper light
+  theme is added, since an admin tool is used in daylight.
+- **Theme selection**: `prefers-color-scheme` by default, with an explicit
+  override persisted in `localStorage`.
+- **Type**: the existing `'Segoe UI', Helvetica, sans-serif` stack — system fonts
+  only, since §4 forbids external requests.
+- **Accessibility** is a requirement, not a nice-to-have: labelled controls,
+  visible focus rings, WCAG AA contrast in both themes, full keyboard operation
+  of the view list and directory picker, `aria-live` announcements for state
+  changes and toasts, and `prefers-reduced-motion` honoured by the loading and
+  refreshing animations.
+- **Responsive** down to a phone: the server list is the one screen people will
+  open from a couch.
+
+## 3.6 Dev loop
+
+```
+cd web && npm install && npm run dev      # Vite on :5173
+```
+
+`vite.config.ts` proxies `/api` → `http://127.0.0.1:19199`, with
+`changeOrigin: false` so the `Origin` check in §2.11 still sees a localhost
+origin, and SSE proxying enabled. Run `sdlna.exe` (or the tray app) alongside and
+the SPA talks to the real backend. `npm run build` emits `web/dist`, which §4
+embeds.
+
+## 3.7 Parity checklist
+
+Every row of §1.12, resolved.
+
+| # | Capability | Where it lives now |
+| --- | --- | --- |
+| 1 | List servers with name, directory count, state | Servers screen |
+| 2 | Live state transitions | State badge + SSE (§3.4) |
+| 3 | Create a server | `/servers/new` |
+| 4 | Edit a server (restarts if running) | `/servers/:id`, with a restart warning |
+| 5 | Remove, with confirmation | Row action + `ConfirmDialog` |
+| 6 | Start / stop | Row action |
+| 7 | Rescan one (only while running) | Row action, disabled otherwise |
+| 8 | Rescan all | Page action, reports skipped count |
+| 9 | Rescan a specific server from the tray | **Dropped** — tray menu shrinks to Open/Exit (§4). Superseded by row 7 one click away |
+| 10 | Server name | Editor → Name |
+| 11 | Sort order from the registry | Editor → Order, from `capabilities` |
+| 12 | Descending toggle | Editor → Order |
+| 13 | Media types, ≥ 1 | Editor → Types |
+| 14 | Add / remove views | Editor → Views, **plus** parameters and reordering |
+| 15 | MAC / IP / User-Agent restrictions, validated | Editor → Restrictions |
+| 16 | Add / remove directories via a picker | Editor → Directories + `DirectoryPicker` (§2.9) |
+| 17 | Validation feedback before accept | Inline zod + `422` mapping |
+| 18 | HTTP port (0 = auto) | Settings, with `effective.port` |
+| 19 | Cache directory | Settings + `DirectoryPicker` |
+| 20 | Rescan delay (1–3600 s) | Settings |
+| 21 | Rescan interval (0–1440 min) | Settings |
+| 22 | Log level | Settings |
+| 23 | Start minimized | Settings, tray host only |
+| 24 | Autostart with Windows | Settings, tray host only |
+| 25 | Prevent sleep while playing | Settings |
+| 26 | Current playback | Shell status strip |
+| 27 | Open the DLNA browse UI | Shell link to `browseUrl` |
+| 28 | Open the log folder | **Replaced** by the Logs screen — a browser cannot open Explorer. `GET /status` still reports `cacheDir` so the path is copyable |
+| 29 | Drop the cache, with confirmation | Settings → maintenance, `ConfirmDialog` |
+| 30 | Product, version, copyright, licence | About |
+| 31 | Project homepage | About (fixes §1.11 #6) |
+| 32 | Hide to tray / show / exit | **Dropped from the SPA** — stays native (§4) |
+| 33 | Single instance focuses the first | **Dropped from the SPA** — stays native (§4). The browser's own tab reuse covers the user-visible half |
+| 34 | Active port at a glance | Shell status strip |
+
+Three rows are deliberately dropped (9, 32, 33) and one is replaced (28). Nothing
+else is lost.
+
+## 3.8 Deliberate additions
+
+New capability, listed so it is a decision rather than scope creep:
+
+1. **Parameterised views** — closes §1.11 #2, previously unreachable *and* crashing.
+2. **Working view reordering** — closes §1.11 #1, buttons that never did anything.
+3. **Per-server error display** via `lastError` — the GUI logged and discarded it.
+4. **Log viewer** — the GUI could only open Explorer.
+5. **Mount prefix and load time** on running servers — already logged at `Notice`
+   (`ServerListViewItem.cs:126-131`), never shown.
+6. **First-run empty state**.
+7. **Backend-down detection** — a new failure mode the GUI could not have.
+8. **Settings Save/Cancel** — replaces commit-on-keystroke with no Cancel.
+9. **Light theme, responsive layout, keyboard and screen-reader support.**
+
+## 3.9 Deferred
+
+- **Bulk actions.** The GUI is single-select (`MultiSelect=false`, §1.11 #8) and
+  "Rescan all" covers the common case. Revisit if anyone runs many servers.
+- **Search / filter of the server list.** Pointless below ~10 servers.
+- **A media browser inside the admin UI.** The DLNA browse UI already exists;
+  merging them is a separate project.
+- **i18n.** The GUI is English-only; no reason to pay for the abstraction now.
+- **Playwright end-to-end tests.** Vitest plus manual verification is proportionate
+  at this size.
+- **Generated API client / OpenAPI.** See §3.4.
