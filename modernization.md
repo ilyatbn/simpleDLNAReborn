@@ -9,7 +9,7 @@ this file holds the four deliverable sections.
 | §1 GUI feature inventory | ✅ done |
 | §2 REST API design | ✅ done |
 | §3 SPA design | ✅ done |
-| §4 WinForms deprecation + build integration | ⬜ not started |
+| §4 WinForms deprecation + build integration | ✅ done |
 
 ---
 
@@ -1444,3 +1444,290 @@ New capability, listed so it is a decision rather than scope creep:
 - **Playwright end-to-end tests.** Vitest plus manual verification is proportionate
   at this size.
 - **Generated API client / OpenAPI.** See §3.4.
+
+---
+
+# §4 — WinForms deprecation and build integration
+
+How `SimpleDLNA.exe` becomes a tray icon, how `sdlna.exe` gains the same admin
+surface, how the SPA gets into the assembly, and the order it all ships in.
+
+## 4.1 `SimpleDLNA.exe` — tray shell
+
+### 4.1.1 What survives, what goes
+
+| File | Fate |
+| --- | --- |
+| `Program.cs` | **Keep** — global mutex `simpledlnaguilock`, named pipe `simpledlnagui`, fatal-error handling |
+| `StartUpUtilities.cs` | **Keep** — autostart registry, driven by `PUT /settings` |
+| `FormMain.cs` + `.Designer.cs` | **Delete** — 686 + 529 lines |
+| `FormServer.cs` + `.Designer.cs` | **Delete** |
+| `FormSettings.cs` + `.Designer.cs` | **Delete** |
+| `FormAbout.cs` + `.Designer.cs` | **Delete** — replaced by the SPA About screen |
+| `ServerListViewItem.cs` | **Delete** — its logic became `ServerManager` (§2.2.1) |
+| `ServerDescription.cs` | **Move** to `admin/` — it is the persisted model, not a GUI type |
+| `Settings.cs`, `Properties/Settings.*` | **Delete** — replaced by `settings.json` (§2.12), after the one-time migration reads them |
+| `Properties/Resources.resx` + `Resources/` | **Trim** to the tray icon and `LICENSE`; the ~12 toolbar PNGs go |
+| `NMaier.Windows.Forms/` (whole project) | **Delete** — grep confirms its only consumers are the four forms being deleted (`FormAbout.cs:4`, `FormMain.cs:21`, `FormServer.cs:11`, `FormSettings.cs:4`). Remove from `sdlna.sln` and from `SimpleDLNA.csproj:21` |
+
+`SimpleDLNA.csproj` also carries a `ProjectReference` to `thumbs` (`:23`) that no
+code in the project uses; `fsserver` already references it. Drop it and confirm
+the build still passes.
+
+The project keeps `<UseWindowsForms>true</UseWindowsForms>` and
+`net10.0-windows` — `NotifyIcon` needs both.
+
+### 4.1.2 What it becomes
+
+No `Form` at all. `Application.Run(new TrayContext())` over an
+`ApplicationContext` that owns a `NotifyIcon`; a hidden form is unnecessary and
+removes the `SetVisibleCore` / minimize-to-tray machinery (§1.1) wholesale.
+
+```
+SimpleDLNA.exe
+├─ Mutex + pipe          second launch re-opens the browser instead of focusing a window
+├─ ServerManager         from admin/ — loads descriptors.xml, starts active servers
+├─ HttpServer            the DLNA server, as today
+├─ AdminServer           loopback :19199 — API + SPA
+├─ SleepInhibitor        driven by playback + the preventSleep setting
+└─ NotifyIcon
+   ├─ "Open SimpleDLNA"   (also the double-click action)  → Shell("http://localhost:19199/")
+   ├─ ─────────
+   └─ "Exit"
+```
+
+Tooltip: `SimpleDLNA - Port {RealPort}`, preserving row 34's affordance.
+
+`Shell()` moves across verbatim from `FormMain.cs:498-513` —
+`ProcessStartInfo { UseShellExecute = true }` is required on .NET to open a URL
+at all, and §1.11 #6 exists precisely because one call site forgot it.
+
+**Menu contents differ from `MIGRATION-PLAN.md`,** which sketched
+*Open UI / Rescan all / Exit*. §3.7 row 9 settled on **Open + Exit**: "Rescan all"
+is one click away in the SPA, and a tray menu that mirrors the web UI is the
+habit this migration is trying to break. The pipe handler changes meaning too —
+it opened and focused the window; now it opens the browser.
+
+### 4.1.3 Sleep inhibition moves down
+
+`SleepInhibitor` is wired in `FormMain` today (`FormMain.cs:46,88`), so
+`sdlna.exe` has never had it. Driving it from `ServerManager` — which sees both
+`HttpServer.Playback` and the `preventSleep` setting — gives the console the same
+behaviour for free. Small, and the natural place for it once the GUI is not the
+only host.
+
+## 4.2 `sdlna.exe` — console parity, and the mode problem
+
+The console builds its servers from command-line arguments
+(`sdlna/Program.cs:130-150`), not from `descriptors.xml`. An API that can create
+and delete servers would be fighting whoever wrote the command line. Two modes,
+distinguished explicitly:
+
+| Mode | Servers come from | API |
+| --- | --- | --- |
+| **CLI** (default, directories given) | Command-line arguments | Read-only plus lifecycle: `GET` everything, `start`/`stop`/`rescan`/`rescan-all`, `POST /cache/drop`. `POST`/`PUT`/`DELETE /servers` and `PUT /settings` → `409` with `code: "cli_managed"` |
+| **Managed** (`--managed`, no directory arguments) | `descriptors.xml` | Full, identical to the tray host minus tray-only settings |
+
+New options, following the `Options.cs` attribute idiom:
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--managed` | off | Ignore directory arguments; manage `descriptors.xml` |
+| `--admin-port=N` | 19199 | Admin listener port |
+| `--no-admin` | off | Disable the admin listener entirely |
+
+The admin API is **on by default** in both modes: it binds loopback only (§2.11),
+costs one socket, and is what makes a headless install observable at all.
+
+### 4.2.1 Amendment to §2.4
+
+`GET /status` gains one field, needed by §3 to disable the mutating UI:
+
+```json
+{ "host": "console", "managed": false }
+```
+
+`managed: false` means server CRUD and settings writes will return `409`. The SPA
+shows a banner — *"This server is configured from the command line"* — hides New
+/ Edit / Remove and the Settings screen, and keeps start/stop/rescan, the log and
+the status strip. The tray host always reports `managed: true`.
+
+## 4.3 Getting the SPA into the assembly
+
+### 4.3.1 Where the assets live
+
+`admin/admin.csproj` owns both the npm build and the embedded resources, because
+both executables reference `admin/` and therefore both get the SPA.
+
+```xml
+<PropertyGroup>
+  <WebRoot>$(MSBuildThisFileDirectory)..\web\</WebRoot>
+  <SkipWebBuild Condition="'$(SkipWebBuild)' == ''">false</SkipWebBuild>
+</PropertyGroup>
+
+<Target Name="BuildWebUI"
+        BeforeTargets="PrepareForBuild"
+        Condition="'$(SkipWebBuild)' != 'true'"
+        Inputs="@(WebSource)"
+        Outputs="$(WebRoot)dist\index.html">
+  <Exec Command="npm ci" WorkingDirectory="$(WebRoot)"
+        Condition="!Exists('$(WebRoot)node_modules')" />
+  <Exec Command="npm run build" WorkingDirectory="$(WebRoot)" />
+</Target>
+
+<Target Name="EmbedWebUI" BeforeTargets="PrepareResourceNames" DependsOnTargets="BuildWebUI">
+  <ItemGroup>
+    <EmbeddedResource Include="$(WebRoot)dist\**\*"
+                      LogicalName="wwwroot/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+</Target>
+```
+
+Two things here are load-bearing and easy to get wrong:
+
+1. **The `EmbeddedResource` items are added inside a target, not in a static
+   `ItemGroup`.** MSBuild evaluates item globs *before* any target runs, so a
+   static glob over `web/dist` matches nothing on a clean checkout — the first
+   build silently ships an empty UI and the second one works. Adding them in a
+   target that depends on the npm build evaluates the glob after `dist` exists.
+2. **`LogicalName` is set explicitly**, which bypasses the SDK's resource-name
+   mangling entirely. That is the answer to the manifest-name concern in
+   `MIGRATION-PLAN.md`: Vite emits `assets/index-D4f8Ab12.js`, and the default
+   naming would turn the path separators and the dash into something the handler
+   would have to reverse-engineer. With `LogicalName`, the resource is called
+   exactly `wwwroot/assets/index-D4f8Ab12.js`.
+
+`Inputs`/`Outputs` give incremental builds: editing only C# does not re-run npm.
+
+### 4.3.2 Building without Node
+
+`SkipWebBuild=true` produces a working server with **no** admin UI — the API
+still runs, and `WebAssets` serves a plain `503` page explaining that the UI was
+not built and how to build it. There is deliberately **no** prebuilt bundle
+checked in: `.gitignore` has a bare `dist/` pattern that already matches
+`web/dist`, and committing generated output to dodge it would be worse than the
+honest failure mode.
+
+### 4.3.3 Serving
+
+`WebAssets` reads via `Assembly.GetManifestResourceStream("wwwroot/…")`, with an
+in-memory index built once at startup.
+
+| Path | Response |
+| --- | --- |
+| `/assets/*` (hashed) | 200, `Cache-Control: public, max-age=31536000, immutable` |
+| `/index.html`, `/` | 200, `Cache-Control: no-cache` |
+| `/api/v1/*` | The API router |
+| anything else without a file extension | `index.html` — SPA client-side routing |
+| anything else with an extension | 404 |
+
+Content types are a small static table (`.html .js .css .svg .png .ico .woff2
+.json .map`); unknown extensions get `application/octet-stream`. The blanket
+`Cache-Control: no-cache` that `ResponseHeaders` stamps on everything
+(`server/Http/ResponseHeaders.cs:12-20`) does not apply here — the admin listener
+writes its own headers (§2.1).
+
+## 4.4 Build system changes
+
+**`Makefile`** — add a `web` target and make the publishes depend on it:
+
+```make
+NPM ?= npm
+web:
+	cd web && $(NPM) ci && $(NPM) run build
+console: web
+gui:     web
+```
+
+plus `SKIP_WEB=true` passing `-p:SkipWebBuild=true` through to `PUBLISH`, a `web`
+line in `help:`, and `web/node_modules` + `web/dist` in `CLEAN_TREES`.
+
+**`.github/workflows/build-release.yml`** — one new step before `Restore`
+(`:44`):
+
+```yaml
+- uses: actions/setup-node@v4
+  with:
+    node-version: '22'
+    cache: npm
+    cache-dependency-path: web/package-lock.json
+```
+
+MSBuild's `BuildWebUI` target then runs `npm run build` during publish, skipping
+`npm ci` because `node_modules` already exists. The release-notes table (`:108-112`)
+needs its GUI row rewritten — `SimpleDLNA.exe` is no longer a "Windows tray GUI"
+with windows, it is a tray launcher for a web UI.
+
+**`.gitignore`** — add `node_modules/`. `web/dist` is already covered.
+
+**`sdlna.sln`** — add `admin/`, remove `NMaier.Windows.Forms/`.
+
+## 4.5 Rollout
+
+Four phases, each independently shippable and revertable. The ordering exists to
+avoid the one genuinely dangerous state: two writers to `descriptors.xml`.
+
+| Phase | Change | User-visible |
+| --- | --- | --- |
+| **1** | Add `admin/`; extract `ServerManager` from `ServerListViewItem`; **`FormMain` uses it**. Add `ServerDescription.Id`. | Nothing. Pure refactor, and the safest place to find out whether the extraction is faithful |
+| **2** | Add `AdminServer` + the API. Both hosts start it. `settings.json` migration. | API available; GUI unchanged and still fully functional |
+| **3** | Build the SPA; embed and serve it; add the build wiring | Both UIs work. The GUI gains one menu item to open the web UI |
+| **4** | Delete the four forms and `NMaier.Windows.Forms`; tray shell; console `--managed`; docs | The GUI is gone |
+
+Phase 1 is the crux. `FormMain` delegating to `ServerManager` means the
+extraction is exercised by the existing UI before anything depends on it, and
+`descriptors.xml` has exactly one writer throughout.
+
+### 4.5.1 Upgrade behaviour
+
+- `descriptors.xml` is read as-is; missing `Id`s are generated and written back on
+  the next save. Downgrading loses the ids, which are then regenerated — harmless.
+- `user.config` is read once to seed `settings.json` and then left alone as a
+  rollback path (§2.12).
+- A `cache` value pointing at a *file* is normalised to its parent directory
+  (§2.13 #3).
+- `descriptors.xml` moves out of the overridable cache directory into the default
+  one (§2.13 #2). The migration copies it if the old location has one and the new
+  one does not.
+
+### 4.5.2 Documentation
+
+| File | Change |
+| --- | --- |
+| `README.md` | Describe the web UI; screenshot; drop "tray GUI" framing |
+| `CLAUDE.md` | Project map gains `admin/` and `web/`; loses `NMaier.Windows.Forms`; build section gains the npm step |
+| `SimpleDLNA/CLAUDE.md` | Rewrite — it currently documents four forms and a log pane that will not exist |
+| `admin/CLAUDE.md`, `web/CLAUDE.md` | New |
+| `sdlna/CLAUDE.md` | Document `--managed`, `--admin-port`, `--no-admin` |
+| `TODO.md` | Tick off the "move away from the c# webforms" block |
+| `CHANGELOG.md` | Entry per phase |
+
+## 4.6 Risks
+
+| Risk | Mitigation |
+| --- | --- |
+| Port 19199 already in use | Fail at startup with a clear message naming the port and `--admin-port`; the tray shows an error balloon rather than dying silently |
+| Node becomes a hard build dependency | `SkipWebBuild=true` (§4.3.2); CI pins Node via `setup-node` |
+| Empty UI from the MSBuild glob evaluating too early | §4.3.1 #1 — the classic failure; called out because it produces a *working build with a broken UI*, which passes CI |
+| Two tray instances both binding 19199 | The existing mutex already prevents it; the pipe handler now opens the browser |
+| Losing GUI behaviour in the extraction | Phase 1 keeps the GUI on top of `ServerManager`, so any drift shows up immediately; §1 is the reference |
+| Users who wanted a desktop app | The tray icon and autostart remain; only the windows change. Worth saying plainly in the release notes |
+
+Firewall behaviour actually **improves**: the admin listener binds loopback, so it
+triggers no Windows Firewall prompt, unlike the media listener on `IPAddress.Any`.
+
+## 4.7 Definition of done
+
+- [ ] `dotnet build sdlna.sln` green with and without `-p:SkipWebBuild=true`
+- [ ] `make` produces `dist/console` and `dist/gui`; both start
+- [ ] Every §1.12 row verified against §3.7 by hand on a real install
+- [ ] An existing `descriptors.xml` and `user.config` upgrade cleanly, with servers
+      and settings intact
+- [ ] `sdlna.exe` with directory arguments serves media and reports
+      `managed: false`; `sdlna.exe --managed` behaves like the tray host
+- [ ] Tray: double-click opens the browser; second launch opens the browser;
+      Exit stops the servers
+- [ ] No reference to `NMaier.Windows.Forms` remains; the project is out of the
+      solution
+- [ ] SPA bundle within the 250 KB gzipped budget (§3.1)
+- [ ] CI publishes both zips and the smoke test passes
