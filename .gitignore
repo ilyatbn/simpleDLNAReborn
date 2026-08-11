@@ -20,3 +20,4 @@ cov-int*
 
 # web UI
 node_modules/
+*.tsbuildinfo
