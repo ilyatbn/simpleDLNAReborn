@@ -10,7 +10,7 @@
 ## Progress
 
 - [x] **Step 0** — this plan → `MIGRATION-PLAN.md`
-- [ ] **Step 1** — GUI feature inventory → `modernization.md` §1
+- [x] **Step 1** — GUI feature inventory → `modernization.md` §1
 - [ ] **Step 2** — REST API design → `modernization.md` §2
 - [ ] **Step 3** — SPA design → `modernization.md` §3
 - [ ] **Step 4** — WinForms deprecation + build integration → `modernization.md` §4
@@ -301,8 +301,6 @@ Per step, before committing:
 5. Nothing is built or run in this phase; the source tree is untouched, so
    `dotnet build sdlna.sln` stays green by construction.
 
-**Working-tree note:** there are pre-existing uncommitted changes in `Readme.md`,
-`SimpleDLNA/FormMain.cs`, `SimpleDLNA/FormMain.Designer.cs`, `TODO.md`,
-`fsserver/FileStore.cs`, `fsserver/Files/Cover.cs`, `fsserver/ItemSerializer.cs`,
-`fsserver/CLAUDE.md`, plus an untracked `subs.md`. Every commit in this plan
-stages the one intended file only and leaves those alone.
+**Working-tree note:** the tree was clean as of Step 1 — the changes that were
+outstanding when this plan was drafted had already landed in `ad68ac8`. Every
+commit in this plan still stages the one intended file only.
