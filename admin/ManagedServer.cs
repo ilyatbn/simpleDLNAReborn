@@ -231,6 +231,24 @@ namespace NMaier.SimpleDlna.Admin
       StartFileServer();
     }
 
+    /// <summary>
+    ///   Stops and starts without touching <see cref="ServerDescription.Active" />,
+    ///   so the server never looks disabled in between and nothing persists an
+    ///   intermediate state.
+    /// </summary>
+    /// <remarks>
+    ///   Rebuilding the <see cref="FileServer" /> is what makes changed rescan
+    ///   settings take effect - they are read from the options at start - and it
+    ///   is also the way to recover a server whose directories went missing.
+    /// </remarks>
+    internal void Restart()
+    {
+      lock (sync) {
+        StopFileServer();
+        StartFileServer();
+      }
+    }
+
     internal void UpdateInfo(ServerDescription description)
     {
       StopFileServer();

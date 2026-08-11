@@ -129,6 +129,17 @@ export function ServersPage() {
                   disabled={s.state !== 'running' || busy === s.id}
                   title={
                     s.state === 'running'
+                      ? 'Stop and start again, picking up changed refresh settings'
+                      : 'Only available while running'
+                  }
+                  onClick={() => act(s.id, () => api.restartServer(s.id))}
+                >
+                  Restart
+                </button>
+                <button
+                  disabled={s.state !== 'running' || busy === s.id}
+                  title={
+                    s.state === 'running'
                       ? 'Rescan this library'
                       : 'Only available while running'
                   }

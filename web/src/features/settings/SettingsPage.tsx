@@ -199,7 +199,8 @@ export function SettingsPage() {
             </label>
             <FieldErrors errors={errors.rescanIntervalMinutes} />
             <div className="small muted">
-              Both apply the next time a server is restarted.
+              Both apply the next time a server is restarted — use{' '}
+              <strong>Restart</strong> on the Servers page to apply them now.
             </div>
           </div>
         </fieldset>

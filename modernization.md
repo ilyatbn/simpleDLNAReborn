@@ -892,6 +892,7 @@ directories are de-duplicated (`FileServer` already calls `.Distinct()`,
 | --- | --- | --- | --- |
 | `POST` | `/servers/{id}/start` | `202` + resource in `loading` | 6 |
 | `POST` | `/servers/{id}/stop` | `202` + resource in `stopped` | 6 |
+| `POST` | `/servers/{id}/restart` | `202`; stop then start, staying active | *new* |
 | `POST` | `/servers/{id}/rescan` | `202` | 7 |
 | `POST` | `/servers/rescan-all` | `202` + `{ "requested": 2, "skipped": 1 }` | 8, 9 |
 
@@ -902,9 +903,19 @@ resource. This mirrors the GUI, which already runs `Toggle()` on a task
 whole library scan.
 
 Conflicts (`409`): starting something already `running`/`loading`, stopping
-something already `stopped`, or rescanning a server that is not `running`. The
-last reproduces the GUI's `ArgumentException("Server is not running")`
-(`ServerListViewItem.cs:171-181`) as a status code instead of a MessageBox.
+something already `stopped`, or rescanning or restarting a server that is not
+`running`. The rescan case reproduces the GUI's
+`ArgumentException("Server is not running")` (`ServerListViewItem.cs:171-181`)
+as a status code instead of a MessageBox.
+
+**Restart** rebuilds the `FileServer` without touching `Active`, so the server
+never looks disabled in between and no intermediate state is persisted. It is
+the only way to apply changed rescan settings — those are read from the options
+at start, which is what the settings dialog's *"(Applies when a server is
+restarted)"* wording always meant — and it recovers a server whose directories
+briefly went missing. Restarting a *stopped* server is rejected rather than
+treated as a start: a failed start turns `Active` off, and `StartFileServer`
+honours that, so it would silently do nothing.
 
 `rescan-all` skips non-running servers rather than failing, matching the GUI's
 swallow-everything loop (`FormMain.cs:515-525`) — but it *reports* the skip count
@@ -1433,6 +1444,10 @@ New capability, listed so it is a decision rather than scope creep:
 7. **Backend-down detection** — a new failure mode the GUI could not have.
 8. **Settings Save/Cancel** — replaces commit-on-keystroke with no Cancel.
 9. **Light theme, responsive layout, keyboard and screen-reader support.**
+10. **Per-server Restart** (`POST /servers/{id}/restart`) — the GUI had no
+    equivalent; stop-then-start meant two clicks and a window where the server
+    read as disabled. It is also the only way to apply changed rescan settings
+    without restarting the whole application.
 
 ## 3.9 Deferred
 

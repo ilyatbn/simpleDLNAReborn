@@ -238,6 +238,18 @@ namespace NMaier.SimpleDlna.Admin.Api
         }
         RunInBackground(() => context.Manager.Stop(id), "stop");
         return Accepted(server);
+      case "restart":
+        if (server.State == ServerState.Loading) {
+          throw new ApiException(409, "conflict", "The server is starting.");
+        }
+        if (!server.IsRunning) {
+          // Restarting a stopped server would be a no-op: a failed start turns
+          // Active off, and StartFileServer honours that. Use start instead.
+          throw new ApiException(409, "conflict",
+            "The server is not running. Start it instead.");
+        }
+        RunInBackground(() => context.Manager.Restart(id), "restart");
+        return Accepted(server);
       case "rescan":
         if (!server.IsRunning) {
           throw new ApiException(409, "conflict",

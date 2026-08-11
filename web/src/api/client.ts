@@ -93,6 +93,8 @@ export const api = {
     request<Server>(`/servers/${id}/start`, { method: 'POST' }),
   stopServer: (id: string) =>
     request<Server>(`/servers/${id}/stop`, { method: 'POST' }),
+  restartServer: (id: string) =>
+    request<Server>(`/servers/${id}/restart`, { method: 'POST' }),
   rescanServer: (id: string) =>
     request<Server>(`/servers/${id}/rescan`, { method: 'POST' }),
   rescanAll: () =>

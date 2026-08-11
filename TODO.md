@@ -4,7 +4,8 @@
     - ~~rest api for everything in the gui~~
     - ~~modern web ui.~~
 
-- "restart server" button
+- ~~"restart server" button~~ done - per-server Restart in the web UI and
+  POST /api/v1/servers/{id}/restart
 - reload server on network change (vpn)
 
 next up

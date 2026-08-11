@@ -249,6 +249,21 @@ namespace NMaier.SimpleDlna.Admin
       Save();
     }
 
+    /// <summary>
+    ///   Stops and starts one server, keeping it active throughout.
+    /// </summary>
+    public void Restart(Guid id)
+    {
+      var server = Find(id);
+      if (server == null) {
+        throw new InvalidOperationException("No such server");
+      }
+      server.Restart();
+      // Only the state changed, but a failed start flips Active off, and that
+      // does need persisting.
+      Save();
+    }
+
     public void Rescan(Guid id)
     {
       var server = Find(id);

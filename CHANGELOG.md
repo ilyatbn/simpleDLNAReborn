@@ -1,5 +1,8 @@
 2026.08.11
 ---
+- added a per-server Restart, in the web UI and as
+  POST /api/v1/servers/{id}/restart. It is also how changed refresh settings
+  are applied without restarting the whole application.
 - replaced the WinForms GUI with a web interface on http://localhost:19199/,
   bound to loopback only.
 - new REST API at /api/v1 covering everything the old GUI could do.
