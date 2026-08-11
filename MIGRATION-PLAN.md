@@ -15,7 +15,12 @@
       *(deviates from §4 Step 2 below: a dedicated admin listener, not
       reuse of `server/Http`. Rationale in `modernization.md` §2.1.)*
 - [x] **Step 3** — SPA design → `modernization.md` §3
-- [ ] **Step 4** — WinForms deprecation + build integration → `modernization.md` §4
+- [x] **Step 4** — WinForms deprecation + build integration → `modernization.md` §4
+      *(tray menu is Open + Exit, not the Open/Rescan all/Exit sketched below —
+      see `modernization.md` §4.1.2. Adds a console CLI/managed mode split, §4.2.)*
+
+**Design phase complete.** Implementation follows the four-phase rollout in
+`modernization.md` §4.5 and is gated separately.
 
 ---
 
