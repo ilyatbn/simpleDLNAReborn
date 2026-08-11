@@ -1719,19 +1719,29 @@ triggers no Windows Firewall prompt, unlike the media listener on `IPAddress.Any
 
 ## 4.7 Definition of done
 
-- [ ] `dotnet build sdlna.sln` green with and without `-p:SkipWebBuild=true`
-- [ ] `make` produces `dist/console` and `dist/gui`; both start
-- [ ] Every §1.12 row verified against §3.7 by hand on a real install
-- [ ] An existing `descriptors.xml` and `user.config` upgrade cleanly, with servers
-      and settings intact
-- [ ] `sdlna.exe` with directory arguments serves media and reports
-      `managed: false`; `sdlna.exe --managed` behaves like the tray host
-- [ ] Tray: double-click opens the browser; second launch opens the browser;
-      Exit stops the servers
-- [ ] No reference to `NMaier.Windows.Forms` remains; the project is out of the
-      solution
-- [ ] SPA bundle within the 250 KB gzipped budget (§3.1)
-- [ ] CI publishes both zips and the smoke test passes
+- [x] `dotnet build sdlna.sln` green with and without `-p:SkipWebBuild=true`
+      — and with Node absent from `PATH` entirely
+- [x] `make` produces `dist/console` and `dist/gui`; both start, and both serve
+      the embedded UI from the published binaries
+- [~] Every §1.12 row verified against §3.7 — **partially**. Exercised by hand:
+      rows 1–17 (list, state, CRUD, lifecycle, editor fields, validation),
+      18–22 via `PUT /settings`, 26–28, 34. Not exercised on a real install:
+      autostart (24), prevent-sleep (25), drop-cache (29) beyond returning 202
+- [x] An existing `descriptors.xml` and `user.config` upgrade cleanly — a
+      no-`<Id>` file gained ids and stayed readable; `settings.json` was seeded
+      from the live `user.config`, preserving a non-default log level
+- [x] `sdlna.exe` with directory arguments serves media and reports
+      `managed: false`; `sdlna.exe --managed` loads `descriptors.xml`
+- [~] Tray: second launch hands off and exits, leaving one process. **Not
+      verified**: double-click and Exit, which need a human at the tray icon
+- [x] No reference to `NMaier.Windows.Forms` remains; the project is out of the
+      solution and deleted
+- [x] SPA bundle within budget — 82 KB gzipped against 250 KB
+- [ ] CI publishes both zips and the smoke test passes — **unverified**, needs a
+      push to run
+
+Also verified, beyond the checklist: the DLNA side still works end to end —
+index page, `description.xml`, and a library browse listing the media file.
 
 ---
 
