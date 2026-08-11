@@ -7,7 +7,7 @@ this file holds the four deliverable sections.
 | Section | Status |
 | --- | --- |
 | §1 GUI feature inventory | ✅ done |
-| §2 REST API design | ⬜ not started |
+| §2 REST API design | ✅ done |
 | §3 SPA design | ⬜ not started |
 | §4 WinForms deprecation + build integration | ⬜ not started |
 
@@ -574,3 +574,575 @@ explicit drop.
 | 32 | Hide to tray / show from tray / exit | §1.1, §1.2.6 |
 | 33 | Single-instance: a second launch focuses the first | §1.1 |
 | 34 | See the active port at a glance (title / tray tooltip) | §1.1 |
+
+---
+
+# §2 — REST API design
+
+The control plane for everything in §1.12, at `http://127.0.0.1:19199/api/v1`,
+hosted in the same process as the DLNA server.
+
+## 2.1 Change from the plan: a dedicated admin listener
+
+`MIGRATION-PLAN.md` §4 Step 2 proposed *"a loopback `TcpListener` on 19199,
+reusing the existing `HttpClient` parse/response machinery"* and making
+`server/`'s handler interfaces public. **Reading the stack closely says
+otherwise.** Eight properties of `server/Http` are wrong for a JSON control API,
+and six of them are wrong in ways that would require editing the code path that
+streams media to TVs:
+
+| # | Property | Evidence | Why it blocks reuse |
+| --- | --- | --- | --- |
+| 1 | The constructor unconditionally starts SSDP | `HTTPServer.cs:72` | A second `HttpServer` would run a second SSDP responder on :1900 and advertise a duplicate device set |
+| 2 | Binds `IPAddress.Any`, no bind parameter | `HTTPServer.cs:63` | Loopback-only is not expressible |
+| 3 | `/` is hard-coded to `IndexHandler` | `HTTPServer.cs:207-209` | The SPA cannot own the root path |
+| 4 | **Request bodies are ASCII-lossy** | `HttpClient.cs:259` | See §2.13 #1 — every non-ASCII character in a POST/PUT body becomes `?` |
+| 5 | `Path` is never split on `?` nor URL-decoded | `HttpClient.cs:268` | No query strings, no encoded path segments |
+| 6 | `HttpCode` has no `201/204/400/409/422`, and `HttpPhrases.Phrases[status]` is indexed unconditionally | `HttpCode.cs:3-17`, `HttpClient.cs:322` | An unlisted code throws `KeyNotFoundException` while writing the status line |
+| 7 | Every response is a `ConcatenatedStream` with a computed `Content-Length` | `HttpClient.cs:316-331`, `:139-157` | No open-ended responses, so no SSE |
+| 8 | `IHandler`, `IPrefixHandler`, `IResponse`, `RegisterHandler` are `internal` | `Interfaces/IHandler.cs:3`, `HTTPServer.cs:216` | Any external handler needs the surface made public |
+
+**Decision: give the admin API its own minimal HTTP layer inside the new
+`admin/` project, and leave `server/Http` untouched.**
+
+The admin surface needs correct UTF-8 bodies, query strings, the full REST status
+vocabulary and open-ended responses — four things the media stack does not have
+and does not need. A purpose-built loopback listener is roughly 250 lines, is
+correct by construction, carries **zero** risk to media serving, and requires no
+visibility changes in `server/`. Reuse would mean rewriting request parsing and
+response writing underneath the DLNA path to gain code we would then have to
+special-case anyway.
+
+What we still reuse, unchanged and public already: `HttpServer` itself
+(`RegisterMediaServer` / `UnregisterMediaServer` / `RealPort` / `MediaMounts` /
+`Playback`), `FileServer`, `Identifiers`, `ViewRepository`, `ComparerRepository`,
+and the `HttpAuthorizer` family.
+
+*(Rejected alternative: add a "no SSDP, bind address, extra status codes" mode to
+`HttpServer` and make the handler interfaces public. Fewer lines overall, but it
+edits the media path to serve an admin concern and still leaves #4/#5/#7 to fix.)*
+
+## 2.2 Architecture
+
+```
+util  ─→  server  ─→  fsserver  ─┐
+                                 ├─→  admin (SimpleDlna.Admin)  ─→  sdlna.exe
+                                 ┘                               └─→  SimpleDLNA.exe
+```
+
+New project `admin/`, assembly `SimpleDlna.Admin`, referencing `server` and
+`fsserver` — the first project allowed to know about both. It contains:
+
+| Piece | Responsibility |
+| --- | --- |
+| `ServerManager` | Owns the configured servers, their `FileServer` instances, their state, and `descriptors.xml`. UI-free. |
+| `SettingsStore` | Global settings, backed by `settings.json` (§2.12) |
+| `AdminServer` | Loopback listener + router |
+| `ApiHandlers` | One method per endpoint, translating JSON ⇄ `ServerManager` |
+| `WebAssets` | Serves the embedded SPA (specified in §4) |
+
+### 2.2.1 `ServerManager` — extracting the GUI's controller
+
+`SimpleDLNA/ServerListViewItem.cs:75-195` is the existing implementation of
+exactly this logic, welded to a `ListViewItem`. It moves across essentially
+unchanged; only the `BeginInvoke` marshalling (`:55-73`) and the `SubItems`
+rendering (`:152-163`) are dropped, replaced by a `StateChanged` event.
+
+```csharp
+public sealed class ManagedServer {
+  public Guid Id { get; }
+  public ServerDescription Description { get; }
+  public ServerState State { get; }          // idle|loading|running|refreshing|stopped
+  public string LastError { get; }           // null unless the last start threw
+  public DateTime? StartedUtc { get; }
+  public double? LoadSeconds { get; }        // from the existing Notice log line
+  public string MountPrefix { get; }         // "/mm-3/", null when stopped
+}
+
+public sealed class ServerManager : IDisposable {
+  IReadOnlyList<ManagedServer> Servers { get; }
+  ManagedServer Add(ServerDescription d);
+  ManagedServer Update(Guid id, ServerDescription d);   // stop → AdoptInfo → start
+  void Remove(Guid id);
+  void Start(Guid id); void Stop(Guid id);
+  void Rescan(Guid id); void RescanAll();
+  void DropCache();
+  event EventHandler<ServerStateChangedEventArgs> StateChanged;
+}
+```
+
+Semantics are inherited verbatim from §1.9 and must not drift:
+
+- `Update` stops, adopts and restarts — editing a running server restarts it.
+- `AdoptInfo` never copies `Active` (`ServerDescription.cs:34-48`), so a running
+  server stays running across an edit.
+- A failed start logs, flips `Active` back to false and lands in `Stopped`
+  (`ServerListViewItem.cs:133-137`). **New:** the exception message is also kept
+  in `LastError` so the UI can show *why*, which the GUI never did.
+- All mutations serialize under one lock. `Start`/`Stop`/`Rescan` are slow
+  (`FileServer.Load()` walks the tree), so the API runs them on the thread pool
+  and returns `202` — see §2.6.3.
+
+### 2.2.2 Server identity
+
+`ServerDescription` has no id (§1.7.1); `Name` is the de-facto key. Add:
+
+```csharp
+public Guid Id { get; set; }   // XmlSerializer round-trips it as an element
+```
+
+Generated on load when absent (`Guid.Empty`), so existing `descriptors.xml` files
+keep working and gain ids on first save. `Name` stays free-form and duplicable.
+
+Note `FileServer.UUID` is **not** usable as the API id: it is derived from the
+directory-based friendly name with only one random byte left over
+(`fsserver/FileServer.cs:150-163`), it only exists while the server is running,
+and two configurations over the same directory collide with probability 1/256 —
+at which point `RegisterMediaServer` throws *"Attempting to register more than
+once"* (`HTTPServer.cs:257-259`). The API reports it read-only as `uuid`.
+
+## 2.3 Conventions
+
+| Aspect | Rule |
+| --- | --- |
+| Base path | `/api/v1` — version in the path, bumped only on a breaking change |
+| Encoding | UTF-8 in and out; `Content-Type: application/json; charset=utf-8` |
+| Casing | `camelCase` members; enums as lowercase strings (`"running"`, `"video"`) |
+| Timestamps | ISO-8601 UTC, e.g. `2026-08-11T09:12:33Z` |
+| Unknown fields | Rejected with `422`, not ignored — a typo in a view name should not silently disable it |
+| Partial updates | Not supported. `PUT` replaces the whole resource; there is no `PATCH` |
+| Caching | `Cache-Control: no-store` on every `/api/v1` response |
+| Method override | None. Real verbs only |
+
+### 2.3.1 Status codes
+
+| Code | Used for |
+| --- | --- |
+| `200 OK` | Successful read, or a mutation that completed synchronously |
+| `201 Created` | `POST /servers`, with `Location` |
+| `202 Accepted` | Start / stop / rescan / drop-cache — work continues in the background |
+| `204 No Content` | `DELETE` |
+| `400 Bad Request` | Malformed JSON, bad query parameter |
+| `404 Not Found` | Unknown id or route |
+| `409 Conflict` | Illegal transition for the current state (e.g. start while `loading`) |
+| `422 Unprocessable Entity` | Well-formed JSON that fails validation |
+| `500 Internal Server Error` | Anything unhandled |
+
+### 2.3.2 Error shape
+
+Every non-2xx response carries:
+
+```json
+{
+  "error": {
+    "code": "validation_failed",
+    "message": "The server description is not valid.",
+    "details": [
+      { "field": "name",        "message": "Must specify a name" },
+      { "field": "directories", "message": "Must specify at least one directory" }
+    ]
+  }
+}
+```
+
+`code` is a stable machine-readable slug; `message` is human-readable; `details`
+is present only for `422`. The `field`/`message` pairs reproduce the GUI's
+validator strings verbatim (§1.3), so the SPA can show the same wording.
+
+Codes: `bad_json`, `bad_parameter`, `not_found`, `conflict`,
+`validation_failed`, `restart_required`, `io_error`, `internal_error`.
+
+## 2.4 `GET /api/v1/status`
+
+Covers checklist rows 26 and 34.
+
+```json
+{
+  "version": "1.2.0",
+  "signature": "WIN64/10.0 UPnP/1.0 DLNADOC/1.5 sdlna/1.2",
+  "mediaPort": 49312,
+  "adminPort": 19199,
+  "startedUtc": "2026-08-11T08:02:11Z",
+  "cacheDir": "C:\\Users\\ilya\\AppData\\Local\\SimpleDLNA",
+  "browseUrl": "http://localhost:49312/",
+  "host": "tray",
+  "playback": {
+    "playing": true,
+    "title": "Blade Runner",
+    "client": "192.168.1.44",
+    "mediaType": "video",
+    "startedUtc": "2026-08-11T09:10:02Z"
+  },
+  "serverCount": { "total": 3, "running": 2 }
+}
+```
+
+Sources: `HttpServer.RealPort` (`HTTPServer.cs:91`), `HttpServer.Signature`
+(`:17`), `Playback.IsPlaying` / `.Current` (`PlaybackMonitor.cs:86,99`),
+`ProductInformation`, `FormMain.CacheDir` logic (`FormMain.cs:131-163`, moving
+into `SettingsStore`). `playback` is `null` when idle, matching *"Nothing
+playing"*. `host` is `"tray"` or `"console"` so the SPA can hide tray-only
+settings (§2.7).
+
+## 2.5 `GET /api/v1/capabilities`
+
+Covers rows 11 and 14 — the SPA must not hard-code the view and order lists.
+
+```json
+{
+  "orders": [
+    { "name": "date",  "description": "Sort by file date" },
+    { "name": "size",  "description": "Sort by file size" },
+    { "name": "title", "description": "Sort alphabetically", "default": true }
+  ],
+  "views": [
+    { "name": "bytitle", "description": "Reorganizes files into folders by title",
+      "configurable": false, "parameters": [] },
+    { "name": "large",   "description": "Show only large files",
+      "configurable": true,
+      "parameters": [ { "name": "size", "type": "uint", "unit": "MB", "default": 300 } ] }
+  ],
+  "mediaTypes":       [ "video", "audio", "image" ],
+  "restrictionTypes": [ "mac", "ip", "userAgent" ],
+  "logLevels":        [ "None", "Fatal", "Error", "Warn", "Info", "Debug" ]
+}
+```
+
+`orders` and `views` come straight from `ComparerRepository.ListItems()` and
+`ViewRepository.ListItems()` (`util/Repository.cs:40-43`) — the same call the GUI
+already makes (`FormServer.cs:124-145`), so new views appear automatically.
+
+**`parameters` has no runtime source.** `IRepositoryItem` exposes only `Name` and
+`Description` (`util/IRepositoryItem.cs:3-8`); each view's accepted parameters are
+implicit in its `SetParameters` body. Two options, decide during implementation:
+
+- **(a) A static table in `admin/`** listing the parameters of the four
+  configurable views (`dimension`, `filter`, `large`, `new`), keyed by name.
+  Cheap; drifts if a view changes.
+- **(b) An optional `IParameterDescribing` interface** on `IView`, implemented by
+  those four. Self-maintaining; touches `server/`.
+
+Recommend (b) — it is four small additions and removes a drift class. Ship (a)
+only if `server/` must stay frozen.
+
+## 2.6 Servers
+
+### 2.6.1 Resource
+
+```json
+{
+  "id": "0f3d…", "name": "Movies",
+  "active": true, "state": "running", "lastError": null,
+  "order": "title", "orderDescending": false,
+  "types": ["video"],
+  "views": ["series", "large:size=700"],
+  "directories": ["D:\\Media\\Movies", "E:\\More"],
+  "restrictions": {
+    "mac": ["01:AF:BC:00:0A:FF"], "ip": ["192.168.1.44"], "userAgent": []
+  },
+  "uuid": "73646c6e-…", "mountPrefix": "/mm-3/",
+  "startedUtc": "2026-08-11T08:02:19Z", "loadSeconds": 4.72
+}
+```
+
+Read-only: `id`, `state`, `lastError`, `uuid`, `mountPrefix`, `startedUtc`,
+`loadSeconds`. `active` is read-only on `PUT` (changed only via start/stop),
+mirroring `AdoptInfo`.
+
+`state` ∈ `idle | loading | running | refreshing | stopped`, exactly the GUI's
+enum (`ServerListViewItem.cs:197-204`).
+
+`views` entries are the raw strings `Identifiers.AddView` consumes, so the
+`name:param=value` form (`util/Repository.cs:52-64`) is expressible — closing
+§1.11 #2. `types` is an array rather than the `DlnaMediaTypes` bitmask.
+
+### 2.6.2 CRUD
+
+| Verb | Path | Result | Checklist |
+| --- | --- | --- | --- |
+| `GET` | `/servers` | `{ "servers": [ … ] }` | 1, 2 |
+| `POST` | `/servers` | `201` + `Location: /api/v1/servers/{id}` | 3 |
+| `GET` | `/servers/{id}` | `200` / `404` | — |
+| `PUT` | `/servers/{id}` | `200`; restarts if running | 4 |
+| `DELETE` | `/servers/{id}` | `204`; stops first if running | 5 |
+
+Validation on `POST`/`PUT`, reproducing §1.3 exactly:
+
+| Field | Rule | `422` message |
+| --- | --- | --- |
+| `name` | non-blank | `Must specify a name` |
+| `types` | ≥ 1 entry, each in `capabilities.mediaTypes` | `Must select at least one` |
+| `directories` | ≥ 1 entry | `Must specify at least one directory` |
+| `order` | resolves via `ComparerRepository` | `Unknown sort order '{v}'` |
+| `views[]` | each resolves via `ViewRepository.Lookup` | `Unknown view '{v}'` |
+| `restrictions.mac[]` | `IP.IsAcceptedMAC` | `You must provide a valid value` |
+| `restrictions.ip[]` | `IPAddress.TryParse` | `You must provide a valid value` |
+| `restrictions.userAgent[]` | non-blank | `You must provide a valid value` |
+
+Directories are **not** checked for existence at validation time — `FileServer`
+filters non-existent ones at start and only fails when none remain
+(`ServerListViewItem.cs:88-94`). The API reports that as `lastError`. Duplicate
+directories are de-duplicated (`FileServer` already calls `.Distinct()`,
+`FileServer.cs:69`); duplicate views are rejected with `422`, closing §1.11 #3.
+
+### 2.6.3 Actions
+
+| Verb | Path | Result | Checklist |
+| --- | --- | --- | --- |
+| `POST` | `/servers/{id}/start` | `202` + resource in `loading` | 6 |
+| `POST` | `/servers/{id}/stop` | `202` + resource in `stopped` | 6 |
+| `POST` | `/servers/{id}/rescan` | `202` | 7 |
+| `POST` | `/servers/rescan-all` | `202` + `{ "requested": 2, "skipped": 1 }` | 8, 9 |
+
+All are asynchronous: the manager flips state, queues the work and returns
+immediately. Progress arrives over `/events` (§2.10) or by re-reading the
+resource. This mirrors the GUI, which already runs `Toggle()` on a task
+(`FormMain.cs:257-270`) — a synchronous API would hold the request open for the
+whole library scan.
+
+Conflicts (`409`): starting something already `running`/`loading`, stopping
+something already `stopped`, or rescanning a server that is not `running`. The
+last reproduces the GUI's `ArgumentException("Server is not running")`
+(`ServerListViewItem.cs:171-181`) as a status code instead of a MessageBox.
+
+`rescan-all` skips non-running servers rather than failing, matching the GUI's
+swallow-everything loop (`FormMain.cs:515-525`) — but it *reports* the skip count
+instead of hiding it (§1.11 #9).
+
+## 2.7 `GET` / `PUT /api/v1/settings`
+
+Covers rows 18–25.
+
+```json
+{
+  "port": 0,
+  "cacheDir": "",
+  "rescanDelaySeconds": 5,
+  "rescanIntervalMinutes": 30,
+  "logLevel": "Error",
+  "startMinimized": false,
+  "preventSleep": false,
+  "autostart": true,
+  "effective": { "port": 49312, "cacheDir": "C:\\Users\\ilya\\AppData\\Local\\SimpleDLNA" },
+  "restartRequired": []
+}
+```
+
+`effective` shows what is actually in force, which is the only way to explain
+`port: 0` meaning "port 49312 today". After a `PUT` that changes `port` or
+`cacheDir`, `restartRequired` lists them and the response is still `200` — the
+value is stored, it just is not live. This replaces the GUI's *"(Requires
+restart)"* tooltips.
+
+| Field | Range | Applied |
+| --- | --- | --- |
+| `port` | 0–65535 | **restart** — the listener is `readonly` (`HTTPServer.cs:25,63`) |
+| `cacheDir` | path or `""` | **restart**, and see §2.13 #3 |
+| `rescanDelaySeconds` | 1–3600 | on next server start |
+| `rescanIntervalMinutes` | 0–1440 (0 = off) | on next server start |
+| `logLevel` | one of `capabilities.logLevels` | **immediately** — re-runs `SetupLogging` |
+| `startMinimized` | bool | next launch; tray host only |
+| `preventSleep` | bool | immediately — re-evaluates `SleepInhibitor.Inhibit` |
+| `autostart` | bool | immediately — writes `HKCU\…\Run` value `SimpleDLNA` |
+
+Ranges are the `NumericUpDown` limits from §1.4, enforced server-side as `422`.
+`autostart` and `startMinimized` are absent from the payload when
+`status.host == "console"`.
+
+`PUT` replaces the whole object; `logLevel` outside the list is `422` rather than
+the GUI's silent fallback (`FormSettings.cs:25-27`).
+
+## 2.8 Maintenance
+
+| Verb | Path | Behaviour | Checklist |
+| --- | --- | --- | --- |
+| `POST` | `/cache/drop` | `202`. Stops every running server, deletes `sdlna.cache`, restarts them — `FormMain.cs:273-303` minus the confirmation box, which becomes the SPA's job | 29 |
+| `GET` | `/log?tail=200&level=Warn` | `200` — the last N parsed lines | 28 |
+
+`GET /log` replaces *"Open Log Folder"*, which cannot work from a browser.
+
+```json
+{
+  "path": "C:\\…\\sdlna.log", "level": "Error", "totalBytes": 184320,
+  "lines": [
+    { "timestamp": "2026-08-11T09:10:02Z", "level": "INFO",
+      "logger": "PlaybackMonitor", "message": "Playback started: Blade Runner (192.168.1.44)" }
+  ]
+}
+```
+
+`tail` defaults to 200, caps at 5000. The file must be opened
+`FileShare.ReadWrite` — log4net holds it open with `ImmediateFlush`
+(`FormMain.cs:611-625`). Lines that do not match the pattern
+(`%date %6level [%3thread] %-30.30logger{1} - %message`, `FormMain.cs:608`) are
+returned with `level: null` and the raw text, so stack traces survive. When
+`logLevel` is `None` there is no file: return `200` with an empty `lines` array
+and `"disabled": true`.
+
+## 2.9 `GET /api/v1/fs?path=`
+
+The replacement for `FolderBrowserDialog` (rows 16 and 19). **Required, not
+optional** — a browser cannot open a native folder picker.
+
+```json
+{
+  "path": "D:\\Media",
+  "parent": "D:\\",
+  "entries": [
+    { "name": "Movies", "path": "D:\\Media\\Movies", "hasChildren": true, "accessible": true }
+  ]
+}
+```
+
+With no `path`, returns the drive list (`DriveInfo.GetDrives()`, ready drives
+only) with `parent: null`. Directories only — files are never listed, since the
+picker only ever chooses directories. Unreadable subdirectories are returned with
+`accessible: false` rather than omitted, so a permissions problem is visible
+instead of looking like an empty folder. `404` for a path that does not exist,
+`400` for a malformed one.
+
+This endpoint enumerates the filesystem, which is why the whole API is
+loopback-only (§2.11).
+
+## 2.10 `GET /api/v1/events` — live state
+
+Server-Sent Events. Feasible here precisely because the admin listener is ours:
+the response writer simply omits `Content-Length` and streams, which the media
+stack cannot do (§2.1 #7).
+
+```
+event: servers
+data: {"id":"0f3d…","state":"running"}
+
+event: playback
+data: {"playing":false}
+
+event: ping
+data: {}
+```
+
+Three event types, all **nudges** rather than state transfer: `servers` (a
+server's state changed — refetch it), `playback` (`PlaybackMonitor.Changed`,
+`PlaybackMonitor.cs:84`), `ping` every 20 s to keep the connection alive and let
+the client detect a dead process. The SPA treats any event as "invalidate and
+refetch", so no ordering or replay guarantees are needed.
+
+**Fallback:** if `EventSource` fails or the connection drops, the SPA polls
+`GET /status` and `GET /servers` — every 1 s while any server is in a transitional
+state (`loading`, `refreshing`), every 5 s otherwise. The API is fully usable with
+`/events` ignored entirely, so this endpoint is a progressive enhancement and can
+be deferred if implementation runs long.
+
+## 2.11 Security model
+
+The bind address **is** the security model, and it is worth being explicit that
+this is the whole of it.
+
+- `AdminServer` binds `IPAddress.Loopback:19199`. Not `Any`, not `IPv6Any`.
+  Nothing outside the machine can reach the API, including hosts the DLNA server
+  happily serves media to.
+- No authentication, no tokens, no CSRF defence. Any local process, and any page
+  in any local browser, can call it.
+- **Consequences to accept knowingly:** a malicious local page can `POST` to
+  `/api/v1/*`. Cross-origin *reads* are blocked by the browser's same-origin
+  policy (no CORS headers are ever sent), but a simple-request `POST` still
+  fires. Mitigations, cheap and worth doing:
+  - Require `Content-Type: application/json` on all mutations — this makes them
+    non-simple requests, so a cross-origin `POST` is preflighted, and the
+    preflight fails because no CORS headers are returned.
+  - Reject any request whose `Origin` header is present and is not
+    `http://localhost:19199` / `http://127.0.0.1:19199`.
+  - Reject requests whose `RemoteEndpoint` is not loopback, belt-and-braces
+    against a future bind change.
+- `GET /api/v1/fs` exposes directory names to anything that can reach the port.
+  Loopback-only is what makes that acceptable.
+- If the bind address is ever widened, a real auth story is a **prerequisite**,
+  not a follow-up: at minimum a bearer token persisted in `settings.json` and
+  shown in the tray menu. Out of scope for v1.
+
+The existing `--ip` / `--mac` / `--ua` allowlist governs the **media** port only
+(`HttpAuthorizer`, `Program.cs:108-118`) and has no bearing here.
+
+## 2.12 Configuration storage
+
+Today's split (§1.8) does not survive the GUI: `Properties.Settings` is
+user-scoped `user.config` reachable only from a WinForms/desktop host, and
+`sdlna.exe` has no equivalent.
+
+**Move global settings to `settings.json`**, same schema as the `GET /settings`
+payload minus `effective`/`restartRequired`, written atomically (temp + replace,
+like `SaveConfig` at `FormMain.cs:527-546`).
+
+Location: **the default cache directory** (`%LOCALAPPDATA%\SimpleDLNA`), never
+the user-overridden one — the file holds `cacheDir` itself, so storing it there
+would be circular. See §2.13 #3.
+
+Migration, once, on first run: if `settings.json` is absent and
+`Properties.Settings` has values, copy them across, write `settings.json`, and
+leave `user.config` alone as a rollback. `descriptors.xml` keeps its format,
+location and `XmlSerializer` — only the `Id` element is added (§2.2.2).
+
+Autostart stays in the registry (`StartUpUtilities.cs`); it is Windows state, not
+app config.
+
+## 2.13 Findings that require changes to existing code
+
+Each of these is a real defect found while designing the API. None is caused by
+the API; all affect it.
+
+1. **Request bodies are ASCII-lossy — this is a live bug, not just an API
+   concern.** `HttpClient.cs:259` decodes the buffer with a `StreamReader` (UTF-8)
+   and then re-encodes it with `Encoding.ASCII.GetBytes`, so every non-ASCII
+   character in a request body becomes `?` before `Body` is read back as UTF-8
+   (`:284`). Only the first segment is affected — later reads append raw bytes
+   (`:232`) — which for small bodies means always. **This already corrupts SOAP
+   `ContentDirectory` requests carrying non-ASCII search criteria.** The admin API
+   sidesteps it by not using this parser, but the fix (buffer raw bytes, decode
+   once at the end) belongs in `server/` on its own merits.
+2. **`descriptors.xml` lives in the overridable cache directory.** `CacheDir`
+   resolves through the `cache` setting (`FormMain.cs:131-137`) and
+   `descriptors.xml` is written there (`:534-539`), so changing the cache
+   directory makes every configured server disappear. The API must either keep
+   `descriptors.xml` next to `settings.json` in the *default* directory, or
+   migrate it on change. **Recommend the former** — configuration is not cache.
+3. **`cache` is used as both a directory and a file path** (§1.11 #4). The API
+   exposes it as `cacheDir` (a directory) and derives the media cache as
+   `{cacheDir}/sdlna.cache`, dropping the file-path interpretation. Existing
+   values that point at a file need one-time normalisation to their parent
+   directory during the §2.12 migration.
+4. **`LoadConfig` can NRE** on `config.Descriptors.Clear()` (§1.11 #5). Moot once
+   `ServerManager` owns loading, but the legacy-migration path must not
+   reintroduce it.
+
+## 2.14 Checklist coverage
+
+| Checklist rows (§1.12) | Covered by |
+| --- | --- |
+| 1, 2 | `GET /servers`, `GET /events` |
+| 3, 4, 5 | `POST` / `PUT` / `DELETE /servers` |
+| 6, 7, 8, 9 | `/servers/{id}/start\|stop\|rescan`, `/servers/rescan-all` |
+| 10–17 | The server resource + validation (§2.6.1, §2.6.2) |
+| 18–24 | `GET` / `PUT /settings` |
+| 25 | `PUT /settings` → `preventSleep` |
+| 26 | `GET /status` → `playback`, `GET /events` |
+| 27 | `GET /status` → `browseUrl` |
+| 28 | `GET /log` |
+| 29 | `POST /cache/drop` |
+| 30 | `GET /status` → `version`; licence text ships in the SPA (§3) |
+| 31 | Not an API concern — a link in the SPA |
+| 32, 33 | **Out of scope.** Tray and single-instance behaviour stay native (§4) |
+| 34 | `GET /status` → `mediaPort` |
+
+Rows 16 and 19 additionally require `GET /fs` (§2.9).
+
+## 2.15 Deferred
+
+- **Authentication** — see §2.11. Blocked on the bind address widening.
+- **`PATCH` semantics** — no demand while the editor submits whole objects.
+- **Per-server logs** — the log is process-wide; splitting it is a `server/`
+  change.
+- **`view` parameter discovery** — §2.5 option (b) is recommended but is a
+  `server/` change; option (a) unblocks the SPA either way.
+- **Restart-in-place for port / cache directory** — would need `HttpServer` to be
+  disposable and re-creatable with every mount re-registered. Real work, and the
+  GUI never did it either. `restartRequired` is honest in the meantime.
