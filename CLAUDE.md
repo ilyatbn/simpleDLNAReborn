@@ -1,12 +1,17 @@
 # simpleDLNA
 
 A zero-config DLNA/UPnP-AV media server. Two front ends over a shared stack:
-`sdlna.exe` (console) and `SimpleDLNA.exe` (Windows tray GUI).
+`sdlna.exe` (console) and `SimpleDLNA.exe` (Windows tray app). Both serve the
+same admin web interface on `http://localhost:19199/`, bound to loopback.
 
 ## Build
 
+Needs the .NET 10 SDK **and Node.js** — the admin SPA in `web/` is built by npm
+and embedded into `SimpleDlna.Admin`.
+
 ```
 dotnet build sdlna.sln
+dotnet build sdlna.sln -p:SkipWebBuild=true   # no Node; API only, no web UI
 dotnet run --project sdlna/sdlna.csproj -- --help
 ```
 
@@ -36,15 +41,20 @@ Dependency order — each layer only knows about the ones above it.
 | `server/` | SimpleDlna.Server | HTTP server, SSDP, SOAP/ContentDirectory, web UI, views, DLNA types |
 | `thumbs/` | SimpleDlna.Thumbnails | Thumbnail generation (System.Drawing + ffmpeg) |
 | `fsserver/` | SimpleDlna.FileMediaServer | Filesystem scanning, media metadata, the SQLite item cache |
+| `admin/` | SimpleDlna.Admin | Server lifecycle, settings, the loopback REST API, the embedded web UI |
+| `web/` | *(npm)* | The admin SPA — React + TypeScript + Vite |
 | `sdlna/` | sdlna.exe | Console entry point + option parsing |
-| `SimpleDLNA/` | SimpleDLNA.exe | WinForms tray GUI |
-| `NMaier.Windows.Forms/` | NMaier.Windows.Forms | Small WinForms base-class/renderer helpers |
+| `SimpleDLNA/` | SimpleDLNA.exe | Tray app that opens the web interface |
 
 `setup/setup.vdproj` is a dead Visual Studio Installer project — it is not in
 the solution and cannot be built without VS. Ignore it.
 
 ## Shortcuts — where things actually are
 
+- Admin REST API: `admin/Api/ApiHandler.cs`; its listener in `admin/Http/AdminServer.cs`
+- Server lifecycle (start/stop/rescan, descriptors.xml): `admin/ServerManager.cs`
+- Admin web UI: `web/src/` — see `web/CLAUDE.md`
+- Tray app: `SimpleDLNA/TrayContext.cs`
 - Console startup / wiring: `sdlna/Program.cs`, options in `sdlna/Options.cs`
 - HTTP request loop: `server/Http/HTTPServer.cs`, `server/Http/HttpClient.cs`
 - DLNA device discovery: `server/Ssdp/SsdpHandler.cs`
@@ -78,3 +88,17 @@ Things that were load-bearing and are worth not re-breaking:
 - Targeting `net10.0-windows` is required by WinForms *and* by
   `System.Drawing.Common`, which is Windows-only. Making the console server
   cross-platform means replacing `System.Drawing` in `thumbs/` and `util/Ffmpeg.cs`.
+
+## The web UI migration (2026-08)
+
+The WinForms GUI is gone; `modernization.md` is the design record and
+`MIGRATION-PLAN.md` the process that produced it. Worth knowing:
+
+- `modernization.md` §1 is a control-by-control inventory of the old GUI, and
+  §3.7 maps every one of its 34 capabilities onto the web UI or an explicit
+  drop. Use it before claiming something is missing — or was never there.
+- `admin/` has its own HTTP layer rather than reusing `server/Http`. §2.1 says
+  why, in eight numbered reasons.
+- **`server/Http/HttpClient.cs:259` re-encodes request bodies as ASCII**, which
+  corrupts any non-ASCII SOAP request. Known, documented in §2.13, not yet
+  fixed — the admin API sidesteps it by not using that parser.

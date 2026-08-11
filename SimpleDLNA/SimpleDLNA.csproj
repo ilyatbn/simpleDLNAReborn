@@ -19,9 +19,7 @@
   <ItemGroup>
     <ProjectReference Include="..\admin\admin.csproj" />
     <ProjectReference Include="..\fsserver\fsserver.csproj" />
-    <ProjectReference Include="..\NMaier.Windows.Forms\NMaier.Windows.Forms.csproj" />
     <ProjectReference Include="..\server\server.csproj" />
-    <ProjectReference Include="..\thumbs\thumbs.csproj" />
     <ProjectReference Include="..\util\util.csproj" />
   </ItemGroup>
 

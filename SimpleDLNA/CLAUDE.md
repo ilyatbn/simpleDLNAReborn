@@ -1,54 +1,45 @@
-# SimpleDLNA — WinForms tray GUI
+# SimpleDLNA — tray app
 
-Manages a set of named server configurations, each of which mounts a
-`FileServer` into one shared `HttpServer`. Persists them to `descriptors.xml`
-and runs minimized to the tray.
+A tray icon that runs the DLNA server and opens the web interface. There are no
+windows: `TrayContext` is an `ApplicationContext`, not a `Form`.
+
+Everything a user can configure lives in the web UI (`web/`) over the REST API
+(`admin/`). This project only owns the things a browser cannot do: living in the
+tray, starting with Windows, and keeping the machine awake.
 
 ## Shortcuts
 
 | Need | File |
 | --- | --- |
-| Main window, tray icon, log pane, server lifecycle | `FormMain.cs` |
-| Add/edit a server configuration dialog | `FormServer.cs` |
-| Global preferences dialog | `FormSettings.cs` |
-| About box | `FormAbout.cs` |
-| The persisted per-server config model | `ServerDescription.cs` |
-| List row + its state/rendering | `ServerListViewItem.cs` |
-| User settings (start minimized, autostart, ...) | `Settings.cs`, `Properties/Settings.Designer.cs` |
-| Library refresh timers | `FormSettings.Designer.cs` group `groupBoxRefresh`; applied in `ServerListViewItem.StartFileServer` |
-| Logging setup, level list | `FormMain.SetupLogging`, `FormMain.LogLevels` |
-| Playback indicator + sleep toggle | `FormMain.UpdatePlaybackState` — the single place playback state turns into behaviour; add new consumers there |
+| Tray icon, menu, lifecycle, logging setup | `TrayContext.cs` |
+| Single instance, second-launch handoff | `Program.cs` |
 | Run-at-login registry handling | `StartUpUtilities.cs` |
-| Icons/images | `Properties/Resources.resx` → `Resources/` |
+| One-time import of the old user.config | `TrayContext.cs` → `LegacySettings` |
+| Icons | `Properties/Resources.resx` → `Resources/` |
 
-`*.Designer.cs` files are generated layout — edit the form in a designer or
-carefully by hand, but keep changes out of the way of regeneration.
+## What is not here any more
 
-## Logging
+`FormMain`, `FormServer`, `FormSettings`, `FormAbout` and `ServerListViewItem`
+were deleted along with the whole `NMaier.Windows.Forms` project. Their server
+lifecycle logic became `admin/ServerManager.cs` and `admin/ManagedServer.cs`;
+their UI became `web/`. `modernization.md` §1 is a full inventory of what they
+did, kept precisely so the parity claim can be checked.
 
-There is no log view in the window and no on/off switch — logging always goes to
-`sdlna.log` in `CacheDir`, and the settings dialog only chooses the level
-(`None`…`Debug`, default `Error`). `FormMain` used to implement log4net's
-`IAppender` and pump events into a `ListView`; that is all gone.
-
-`SetupLogging` runs again every time the settings dialog closes, so it calls
-`hierarchy.ResetConfiguration()` first. Without that each visit stacks another
-appender on the root logger and every line gets written N times.
-
-The appender rolls composite — by date so yesterday is a separate file, and by
-size (5MB) so one noisy day cannot fill the disk. `MaxSizeRollBackups = 1` keeps
-a single rolled file, which bounds the total at roughly 10MB.
+`Properties/Settings.*` and `Settings.cs` survive **only** so the first run of
+this build can copy the old user-scoped settings into `settings.json`. Nothing
+reads them afterwards, and they can go once nobody upgrades from a pre-web
+build.
 
 ## Gotchas
 
-- Anything touching controls from a server thread must go through `BeginInvoke`
-  — see `ServerListViewItem.BeginInvoke`.
-- Config and logs live under `CacheDir` (per-user app data), not next to the
-  exe. `descriptors.xml` there is the source of truth for configured servers.
-- `PathEnvironmentInstaller.cs` was deleted in the .NET 10 move: it derived from
-  `System.Configuration.Install.Installer`, which does not exist outside .NET
-  Framework, and its only caller was the MSI (`setup/setup.vdproj`) that can no
-  longer be built. If a real installer comes back, the "add install dir to user
-  PATH" behaviour needs reimplementing — see git history for the original.
-- Same stale-`#if DEBUG` trap as `sdlna/`: the debug-only log file path had an
-  uncompilable identifier for years. If you edit inside `#if DEBUG`, build Debug.
+- The tray icon is the process. Closing the browser tab does nothing; *Exit*
+  in the tray menu is what stops the servers.
+- A second launch does not focus a window - there is none. It writes to the
+  `simpledlnagui` pipe and the running instance opens the browser.
+- `NotifyIcon.Text` throws above 63 characters, hence `Truncate`.
+- `Process.Start` needs `UseShellExecute = true` on .NET to open a URL at all.
+  The old code had one call site that forgot, and the Homepage menu item was
+  broken for years because of it.
+- Config and logs live under `%LOCALAPPDATA%\SimpleDLNA`. Configuration stays
+  there even when the cache directory setting points elsewhere — see
+  `admin/Paths.cs` for why.

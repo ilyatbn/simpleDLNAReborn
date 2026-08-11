@@ -22,6 +22,12 @@ SELF_CONTAINED ?= true
 VERSION_SUFFIX ?=
 ARGS           ?=
 
+# The admin web UI is built by npm and embedded into SimpleDlna.Admin. Set
+# SKIP_WEB=true to build without Node; the API still runs and the UI route
+# serves an explanatory 503.
+NPM            ?= npm
+SKIP_WEB       ?= false
+
 # Overridable so a broken PATH can be worked around without editing this file:
 #   make build DOTNET="C:\Program Files\dotnet\dotnet.exe"
 DOTNET         ?= dotnet
@@ -48,7 +54,8 @@ BLANK       := echo.
 
 # cmd has no recursive delete that tolerates missing paths, and no globbing for
 # directories, so both cleanups go through PowerShell.
-CLEAN_TREES  = $(PS) "Remove-Item -Recurse -Force -ErrorAction Ignore '$(DIST)',*/bin,*/obj"
+CLEAN_TREES  = $(PS) "Remove-Item -Recurse -Force -ErrorAction Ignore '$(DIST)',*/bin,*/obj,web/dist"
+CLEAN_NODE   = $(PS) "Remove-Item -Recurse -Force -ErrorAction Ignore web/node_modules"
 MAKE_ZIPS    = $(PS) "$$s = Get-Date -Format 'yyyyMMdd-HHmmss'; Compress-Archive -Path '$(DIST)/console/*' -DestinationPath ('$(DIST)/simpledlna-' + $$s + '-console-$(RID).zip') -Force; Compress-Archive -Path '$(DIST)/gui/*' -DestinationPath ('$(DIST)/simpledlna-' + $$s + '-gui-$(RID).zip') -Force; Get-ChildItem '$(DIST)/*.zip' | Format-Table Name,Length"
 
 else
@@ -57,7 +64,8 @@ EXE         :=
 CONSOLE_BIN := ./$(DIST)/console/sdlna$(EXE)
 BLANK       := echo ""
 
-CLEAN_TREES  = rm -rf $(DIST) */bin */obj
+CLEAN_TREES  = rm -rf $(DIST) */bin */obj web/dist
+CLEAN_NODE   = rm -rf web/node_modules
 MAKE_ZIPS    = s=$$(date -u +%Y%m%d-%H%M%S); \
                (cd $(DIST)/console && zip -qr ../simpledlna-$$s-console-$(RID).zip .); \
                (cd $(DIST)/gui     && zip -qr ../simpledlna-$$s-gui-$(RID).zip .)
@@ -68,9 +76,12 @@ PUBLISH := $(DOTNET) publish -c $(CONFIG) -r $(RID) --self-contained $(SELF_CONT
 ifneq ($(strip $(VERSION_SUFFIX)),)
 PUBLISH += -p:VersionSuffix=$(VERSION_SUFFIX)
 endif
+ifeq ($(SKIP_WEB),true)
+PUBLISH += -p:SkipWebBuild=true
+endif
 
 .DEFAULT_GOAL := build
-.PHONY: help build console gui restore rebuild run smoke zip clean distclean
+.PHONY: help build console gui web restore rebuild run smoke zip clean distclean
 
 # Text below is echoed by cmd.exe as well as sh, so it avoids the characters
 # cmd treats as redirection or grouping: > < | & ( ).
@@ -79,7 +90,8 @@ help:
 	@$(BLANK)
 	@echo   build      Publish both apps into $(DIST)/  [default]
 	@echo   console    Publish just the CLI, to $(DIST)/console
-	@echo   gui        Publish just the GUI, to $(DIST)/gui
+	@echo   gui        Publish just the tray app, to $(DIST)/gui
+	@echo   web        Rebuild just the admin web UI
 	@echo   run        Build the CLI and run it: make run ARGS=--help
 	@echo   smoke      Build the CLI and check that it starts
 	@echo   zip        Build, then zip each app into $(DIST)/
@@ -92,12 +104,18 @@ help:
 	@echo   DIST=$(DIST)
 	@echo   RID=$(RID)
 	@echo   SELF_CONTAINED=$(SELF_CONTAINED)   false gives a small build needing the runtime
+	@echo   SKIP_WEB=$(SKIP_WEB)   true builds without Node, leaving out the web UI
 	@echo   VERSION_SUFFIX=$(VERSION_SUFFIX)   appended to the version, e.g. 20260810-2045
 	@echo   DOTNET=$(DOTNET)   set to a full path if dotnet is not found
 
 build: console gui
 	@$(BLANK)
 	@echo Built into $(DIST)/ : console/sdlna$(EXE) and gui/SimpleDLNA$(EXE)
+
+# The publishes also trigger the npm build through admin.csproj; this target
+# exists so the UI can be rebuilt on its own.
+web:
+	cd web && $(NPM) ci --no-audit --no-fund && $(NPM) run build
 
 console:
 	$(PUBLISH) $(CONSOLE_PROJ) -o $(DIST)/console
@@ -124,3 +142,4 @@ clean:
 	@$(CLEAN_TREES)
 
 distclean: clean
+	@$(CLEAN_NODE)

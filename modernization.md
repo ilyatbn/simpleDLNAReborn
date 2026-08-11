@@ -10,6 +10,7 @@ this file holds the four deliverable sections.
 | §2 REST API design | ✅ done |
 | §3 SPA design | ✅ done |
 | §4 WinForms deprecation + build integration | ✅ done |
+| §5 Implementation notes — where the build differed | ✅ done |
 
 ---
 
@@ -1731,3 +1732,78 @@ triggers no Windows Firewall prompt, unlike the media listener on `IPAddress.Any
       solution
 - [ ] SPA bundle within the 250 KB gzipped budget (§3.1)
 - [ ] CI publishes both zips and the smoke test passes
+
+---
+
+# §5 — Implementation notes
+
+Where the built thing differs from the design above, and why. Recorded so the
+design stays a truthful description of the code.
+
+## 5.1 Fewer SPA dependencies than §3.1 specified
+
+§3.1 called for TanStack Query, react-hook-form and zod. The build ships **three
+runtime dependencies** — react, react-dom, react-router-dom — and none of those
+three.
+
+- **Data fetching** is `web/src/api/useAsync.ts`, ~50 lines. Invalidation is
+  explicit and SSE-driven, so there is no staleness heuristic for a cache
+  library to manage. Shared live state (status + servers) lives in one context,
+  `api/live.tsx`.
+- **Validation** is server-authoritative. The API already returns per-field
+  messages (§2.3.2) and the editor maps `error.details[].field` onto inputs, so
+  a client-side schema would only duplicate rules that must exist server-side
+  anyway. The cost is that errors appear on submit rather than on blur.
+
+Net effect: 82 KB gzipped against a 250 KB budget. If the form logic grows,
+zod is the first thing to add back.
+
+## 5.2 View parameter metadata uses option (a)
+
+§2.5 offered a static table or an `IView` interface, and recommended the
+interface. The build ships **the static table**
+(`admin/Api/ViewParameters.cs`), because it keeps `server/` untouched. The
+recommendation stands as the durable fix and is listed in `TODO.md`.
+
+## 5.3 The MSBuild hook is `AssignTargetPaths`, not `PrepareResourceNames`
+
+§4.3.1 was right that the `EmbeddedResource` items must be added inside a
+target, and wrong about which one. `BeforeTargets="PrepareResourceNames"` fires
+*after* that target's `DependsOnTargets` have run — including
+`AssignTargetPaths`, which is what gives each item its target path. Items added
+at that point are silently dropped: the build succeeds, the assembly contains no
+resources, and the UI route serves the "not built" page.
+
+This was hit during implementation and cost a debugging cycle. The working hook
+is `BeforeTargets="AssignTargetPaths"`.
+
+Related: `%(RecursiveDir)` yields Windows separators, so the logical name of a
+nested asset is `wwwroot/assets\index-abc123.js`. `WebAssets` normalises
+backslashes when it builds its index, since URLs use forward slashes.
+
+## 5.4 Console mode split landed in Phase 2, not Phase 4
+
+§4.2's `--managed` / `--admin-port` / `--no-admin` were implemented alongside the
+API rather than after the SPA. The console is the only front end that can be
+driven headlessly, so it was needed to test the API end to end.
+
+`ServerManager.Adopt` is the mechanism §4.2 implied but did not name: it wraps a
+`FileServer` the console already built and mounted, so command-line servers
+appear in the API without the manager owning their configuration.
+`ServerManager.Persist` is set to false in that mode — otherwise the console
+would overwrite the tray app's `descriptors.xml` with its command-line servers.
+
+## 5.5 Verified against a running server
+
+Not a design change, but worth recording as evidence for §4.7:
+
+- A legacy `descriptors.xml` with no `<Id>` loads, gains ids, and is written
+  back readable.
+- `Фильмы — Ünicode 日本語` round-trips POST → GET → `descriptors.xml`, which is
+  the case that justified §2.1's separate HTTP layer.
+- Validation returns all nine WinForms messages for a deliberately invalid
+  payload; conflicting lifecycle calls return 409; `PUT /settings` reports
+  `restartRequired: ["port"]` while `effective.port` keeps the live value.
+- SSE emits `stopped` → `loading` → `running` for a stop/start cycle.
+- All five screens render in a private Brave window; hashed assets are served
+  `immutable`, client routes fall back to the shell, unknown files 404.

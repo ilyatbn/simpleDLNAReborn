@@ -19,8 +19,9 @@
       *(tray menu is Open + Exit, not the Open/Rescan all/Exit sketched below —
       see `modernization.md` §4.1.2. Adds a console CLI/managed mode split, §4.2.)*
 
-**Design phase complete.** Implementation follows the four-phase rollout in
-`modernization.md` §4.5 and is gated separately.
+**Design phase complete. Implementation complete.** All four rollout phases in
+`modernization.md` §4.5 have landed; §5 there records where the build differed
+from the design.
 
 ---
 

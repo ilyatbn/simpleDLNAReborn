@@ -41,6 +41,19 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # The admin web UI is built by npm and embedded into SimpleDlna.Admin by
+      # admin.csproj. Installing the packages here means the MSBuild target only
+      # has to run `npm run build`, and the cache keeps that quick.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci --no-audit --no-fund
+
       - name: Restore
         run: dotnet restore sdlna.sln
 
@@ -108,6 +121,9 @@ jobs:
             | Download | Contents |
             | --- | --- |
             | `${{ steps.name.outputs.tag }}-console-win-x64.zip` | `sdlna.exe` — command line server |
-            | `${{ steps.name.outputs.tag }}-gui-win-x64.zip` | `SimpleDLNA.exe` — Windows tray GUI |
+            | `${{ steps.name.outputs.tag }}-gui-win-x64.zip` | `SimpleDLNA.exe` — tray app; manage it at http://localhost:19199/ |
+
+            Both builds serve the admin web interface on
+            `http://localhost:19199/`, bound to loopback only.
 
             Video thumbnails additionally require `ffmpeg` on `PATH`.

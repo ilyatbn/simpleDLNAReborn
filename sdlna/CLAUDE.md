@@ -4,6 +4,22 @@ Thin shell: parse options, build a `FileServer`, register it with an
 `HttpServer`, block until Ctrl-C. All the actual work is in `server/` and
 `fsserver/`.
 
+## Two modes
+
+| Mode | Servers from | API |
+| --- | --- | --- |
+| default | command-line arguments | read-only plus start/stop/rescan; `POST`/`PUT`/`DELETE` answer 409 `cli_managed` |
+| `--managed` | `descriptors.xml`, like the tray app | full |
+
+Command-line servers are mounted here and then **adopted** by the
+`ServerManager` so the web interface can see them. `manager.Persist` is set to
+false in that mode; without it the console would overwrite the tray app's saved
+configuration with whatever was on the command line.
+
+The admin interface runs in both modes on `http://localhost:19199/`. Move it
+with `--admin-port=N`, turn it off with `--no-admin`. A busy port is logged and
+skipped — it never stops the media server from starting.
+
 ## Shortcuts
 
 | Need | File |
