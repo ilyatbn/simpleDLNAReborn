@@ -11,7 +11,9 @@
 
 - [x] **Step 0** — this plan → `MIGRATION-PLAN.md`
 - [x] **Step 1** — GUI feature inventory → `modernization.md` §1
-- [ ] **Step 2** — REST API design → `modernization.md` §2
+- [x] **Step 2** — REST API design → `modernization.md` §2
+      *(deviates from §4 Step 2 below: a dedicated admin listener, not
+      reuse of `server/Http`. Rationale in `modernization.md` §2.1.)*
 - [ ] **Step 3** — SPA design → `modernization.md` §3
 - [ ] **Step 4** — WinForms deprecation + build integration → `modernization.md` §4
 
