@@ -18,4 +18,60 @@
     <ProjectReference Include="..\util\util.csproj" />
   </ItemGroup>
 
+  <!-- The admin SPA. Both executables reference this project, so embedding the
+       bundle here gives both of them the web UI.
+
+       Build without Node with -p:SkipWebBuild=true: the API still runs and the
+       UI route serves an explanatory 503 (see Http/WebAssets.cs). -->
+  <PropertyGroup>
+    <WebRoot>$(MSBuildThisFileDirectory)..\web\</WebRoot>
+    <SkipWebBuild Condition="'$(SkipWebBuild)' == ''">false</SkipWebBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <WebSource Include="$(WebRoot)src\**\*" />
+    <WebSource Include="$(WebRoot)index.html" />
+    <WebSource Include="$(WebRoot)package.json" />
+    <WebSource Include="$(WebRoot)package-lock.json" />
+    <WebSource Include="$(WebRoot)tsconfig.json" />
+    <WebSource Include="$(WebRoot)vite.config.ts" />
+  </ItemGroup>
+
+  <Target Name="BuildWebUI"
+          BeforeTargets="PrepareForBuild"
+          Condition="'$(SkipWebBuild)' != 'true' AND Exists('$(WebRoot)package.json')"
+          Inputs="@(WebSource)"
+          Outputs="$(WebRoot)dist\index.html">
+    <Message Importance="high" Text="Building the web UI in $(WebRoot)" />
+    <Exec Command="npm ci --no-audit --no-fund"
+          WorkingDirectory="$(WebRoot)"
+          Condition="!Exists('$(WebRoot)node_modules')" />
+    <Exec Command="npm run build" WorkingDirectory="$(WebRoot)" />
+  </Target>
+
+  <!-- The EmbeddedResource items are added inside a target on purpose. MSBuild
+       evaluates item globs before any target runs, so a static glob over
+       web/dist matches nothing on a clean checkout: the first build would ship
+       an empty UI and the second one would work. That failure passes CI.
+
+       LogicalName is set explicitly to bypass the SDK's resource-name mangling,
+       which would otherwise rewrite Vite's hashed names such as
+       assets/index-D4f8Ab12.js.
+
+       The hook is AssignTargetPaths, not PrepareResourceNames: BeforeTargets
+       fires after the target's DependsOnTargets have already run, so hooking
+       PrepareResourceNames lands after AssignTargetPaths and the new items are
+       silently dropped - the build succeeds with no resources embedded. -->
+  <Target Name="EmbedWebUI"
+          BeforeTargets="AssignTargetPaths"
+          DependsOnTargets="BuildWebUI">
+    <ItemGroup>
+      <_WebAsset Include="$(WebRoot)dist\**\*" />
+      <EmbeddedResource Include="@(_WebAsset)"
+                        LogicalName="wwwroot/%(RecursiveDir)%(Filename)%(Extension)" />
+    </ItemGroup>
+    <Message Importance="normal"
+             Text="Embedding @(_WebAsset->Count()) web asset(s)" />
+  </Target>
+
 </Project>

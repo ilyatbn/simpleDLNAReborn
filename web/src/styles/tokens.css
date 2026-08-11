@@ -1,0 +1,74 @@
+/* Design tokens. The dark values descend from the DLNA browse UI's palette
+   (#22282c on #6c96ad) so the two surfaces read as one product; the light
+   theme is new, because an admin tool gets used in daylight. */
+
+:root {
+  --font: 'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial,
+    sans-serif;
+  --mono: 'Cascadia Mono', Consolas, 'SF Mono', Menlo, monospace;
+
+  --radius: 8px;
+  --radius-sm: 5px;
+  --gap: 1rem;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 8px 24px rgb(0 0 0 / 0.08);
+
+  --accent: #1f6f9a;
+  --accent-fg: #ffffff;
+  --accent-soft: #e3f0f8;
+
+  --ok: #1a7f47;
+  --warn: #a3641a;
+  --danger: #b3261e;
+  --busy: #1f6f9a;
+
+  --bg: #f2f5f7;
+  --surface: #ffffff;
+  --surface-2: #f7f9fb;
+  --border: #d6dee4;
+  --border-strong: #b9c6d0;
+  --fg: #16202a;
+  --fg-muted: #5a6b78;
+  --focus: #1f6f9a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --accent: #63b3e0;
+    --accent-fg: #08141c;
+    --accent-soft: #1a2c38;
+
+    --ok: #5cc98d;
+    --warn: #e0b060;
+    --danger: #f08d84;
+    --busy: #63b3e0;
+
+    --bg: #171d21;
+    --surface: #22282c;
+    --surface-2: #1b2226;
+    --border: #333e45;
+    --border-strong: #47555e;
+    --fg: #e6edf2;
+    --fg-muted: #9aabb6;
+    --focus: #8fd0f0;
+  }
+}
+
+:root[data-theme='dark'] {
+  --accent: #63b3e0;
+  --accent-fg: #08141c;
+  --accent-soft: #1a2c38;
+
+  --ok: #5cc98d;
+  --warn: #e0b060;
+  --danger: #f08d84;
+  --busy: #63b3e0;
+
+  --bg: #171d21;
+  --surface: #22282c;
+  --surface-2: #1b2226;
+  --border: #333e45;
+  --border-strong: #47555e;
+  --fg: #e6edf2;
+  --fg-muted: #9aabb6;
+  --focus: #8fd0f0;
+}

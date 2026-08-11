@@ -51,9 +51,14 @@ namespace NMaier.SimpleDlna.Admin.Http
     {
       assembly = typeof (WebAssets).Assembly;
       foreach (var name in assembly.GetManifestResourceNames()) {
-        if (name.StartsWith(ROOT, StringComparison.OrdinalIgnoreCase)) {
-          resources["/" + name.Substring(ROOT.Length)] = name;
+        if (!name.StartsWith(ROOT, StringComparison.OrdinalIgnoreCase)) {
+          continue;
         }
+        // MSBuild's %(RecursiveDir) uses backslashes, so the logical name of a
+        // nested asset is "wwwroot/assets\index-abc123.js". URLs use forward
+        // slashes.
+        var path = "/" + name.Substring(ROOT.Length).Replace('\\', '/');
+        resources[path] = name;
       }
       HasUi = resources.ContainsKey("/index.html");
     }

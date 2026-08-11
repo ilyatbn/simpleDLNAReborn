@@ -17,3 +17,6 @@ setup/Release
 setup/*.cmd
 pages/
 cov-int*
+
+# web UI
+node_modules/
