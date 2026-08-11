@@ -14,6 +14,8 @@ using log4net.Core;
 using log4net.Layout;
 using log4net.Repository.Hierarchy;
 using NMaier.SimpleDlna.Admin;
+using NMaier.SimpleDlna.Admin.Api;
+using NMaier.SimpleDlna.Admin.Http;
 using NMaier.SimpleDlna.GUI.Properties;
 using NMaier.SimpleDlna.Server;
 using NMaier.SimpleDlna.Utilities;
@@ -25,6 +27,8 @@ namespace NMaier.SimpleDlna.GUI
   public partial class FormMain : Form
   {
     private const string DESCRIPTOR_FILE = "descriptors.xml";
+
+    internal const string AUTOSTART_KEY = "SimpleDLNA";
 
     private bool canClose;
 
@@ -43,6 +47,10 @@ namespace NMaier.SimpleDlna.GUI
     private HttpServer httpServer;
 
     private ServerManager manager;
+
+    private SettingsStore settingsStore;
+
+    private AdminHost adminHost;
 
     private readonly SleepInhibitor sleepInhibitor = new SleepInhibitor();
 
@@ -287,6 +295,14 @@ namespace NMaier.SimpleDlna.GUI
     {
       Text = "Going down...";
       httpServer.Playback.Changed -= PlaybackChanged;
+      if (adminHost != null) {
+        adminHost.Dispose();
+        adminHost = null;
+      }
+      if (settingsStore != null) {
+        settingsStore.Changed -= SettingsChanged;
+        settingsStore = null;
+      }
       if (manager != null) {
         manager.ListChanged -= ManagerListChanged;
         manager.StateChanged -= ManagerStateChanged;
@@ -457,6 +473,17 @@ namespace NMaier.SimpleDlna.GUI
       Shell($"http://localhost:{httpServer.RealPort}/");
     }
 
+    private void openAdminUiToolStripMenuItem_Click(object sender, EventArgs e)
+    {
+      if (adminHost == null) {
+        MessageBox.Show(
+          this, "The admin interface is not running.", "SimpleDLNA",
+          MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        return;
+      }
+      Shell(adminHost.Url);
+    }
+
     private void openLogFolderToolStripMenuItem_Click(object sender,
       EventArgs e)
     {
@@ -507,6 +534,8 @@ namespace NMaier.SimpleDlna.GUI
           TimeSpan.FromSeconds((double)config.rescandelay);
         manager.Options.RescanInterval =
           TimeSpan.FromMinutes((double)config.rescaninterval);
+        // Push the dialog's values into the store the API reads.
+        settingsStore?.Save(SettingsFromConfig());
       }
     }
 
@@ -604,8 +633,113 @@ namespace NMaier.SimpleDlna.GUI
         });
       manager.ListChanged += ManagerListChanged;
       manager.StateChanged += ManagerStateChanged;
+      SetupAdmin();
       LoadConfig();
       Text = $"{Text} - Port {httpServer.RealPort}";
+    }
+
+    /// <summary>
+    ///   Starts the loopback admin API.
+    /// </summary>
+    /// <remarks>
+    ///   While both UIs exist, user.config stays the dialog's editing surface
+    ///   and settings.json is what the API reads and writes; the two are synced
+    ///   at the few points where either can change. All of this goes away with
+    ///   the forms.
+    /// </remarks>
+    private void SetupAdmin()
+    {
+      try {
+        settingsStore = new SettingsStore(Paths.SettingsFile);
+        settingsStore.SeedIfMissing(SettingsFromConfig());
+        settingsStore.Changed += SettingsChanged;
+
+        adminHost = new AdminHost(new AdminContext
+        {
+          Http = httpServer,
+          Manager = manager,
+          Settings = settingsStore,
+          Managed = true,
+          HostKind = "tray",
+          GetAutostart = GetAutostart,
+          SetAutostart = SetAutostart
+        });
+        log.InfoFormat("Admin UI available at {0}", adminHost.Url);
+      }
+      catch (AdminServerBindException ex) {
+        log.Error("Could not start the admin interface", ex);
+        MessageBox.Show(
+          this, ex.Message, "SimpleDLNA", MessageBoxButtons.OK,
+          MessageBoxIcon.Warning);
+      }
+      catch (Exception ex) {
+        log.Error("Could not start the admin interface", ex);
+      }
+    }
+
+    private static AppSettings SettingsFromConfig()
+    {
+      return new AppSettings
+      {
+        Port = (int)config.port,
+        CacheDir = config.cache ?? string.Empty,
+        RescanDelaySeconds = (int)config.rescandelay,
+        RescanIntervalMinutes = (int)config.rescaninterval,
+        LogLevel = config.loglevel,
+        StartMinimized = config.startminimized,
+        PreventSleep = config.preventsleep
+      };
+    }
+
+    /// <summary>
+    ///   Mirrors a change made through the API back into the dialog's settings
+    ///   and applies whatever takes effect immediately.
+    /// </summary>
+    private void SettingsChanged(object sender, SettingsChangedEventArgs e)
+    {
+      var s = e.Current;
+      SafeInvoke(() =>
+      {
+        config.port = s.Port;
+        config.cache = s.CacheDir ?? string.Empty;
+        config.rescandelay = s.RescanDelaySeconds;
+        config.rescaninterval = s.RescanIntervalMinutes;
+        config.loglevel = s.LogLevel;
+        config.startminimized = s.StartMinimized;
+        config.preventsleep = s.PreventSleep;
+        config.Save();
+
+        preventSleepToolStripMenuItem.Checked = s.PreventSleep;
+        SetupLogging();
+        UpdatePlaybackState();
+        if (manager != null) {
+          manager.Options.ChangeDelay =
+            TimeSpan.FromSeconds(s.RescanDelaySeconds);
+          manager.Options.RescanInterval =
+            TimeSpan.FromMinutes(s.RescanIntervalMinutes);
+        }
+      });
+    }
+
+    private static bool GetAutostart()
+    {
+      using (var utilities = new StartupUtilities(
+        StartupUtilities.StartupUserScope.CurrentUser)) {
+        return utilities.CheckIfRunAtWinBoot(AUTOSTART_KEY);
+      }
+    }
+
+    private static void SetAutostart(bool enabled)
+    {
+      using (var utilities = new StartupUtilities(
+        StartupUtilities.StartupUserScope.CurrentUser)) {
+        if (enabled) {
+          utilities.InstallAutoRun(AUTOSTART_KEY);
+        }
+        else {
+          utilities.UninstallAutoRun(AUTOSTART_KEY);
+        }
+      }
     }
 
     /// <summary>

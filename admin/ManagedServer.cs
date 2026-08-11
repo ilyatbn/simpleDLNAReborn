@@ -36,6 +36,23 @@ namespace NMaier.SimpleDlna.Admin
       Description = description;
     }
 
+    /// <summary>
+    ///   Wraps a <see cref="FileServer" /> somebody else built and registered,
+    ///   which is how the console surfaces its command-line servers through the
+    ///   API without owning their configuration.
+    /// </summary>
+    internal ManagedServer(ServerManager owner, ServerDescription description,
+      FileServer existing)
+      : this(owner, description)
+    {
+      fileServer = existing;
+      state = ServerState.Running;
+      StartedUtc = DateTime.UtcNow;
+      MountPrefix = FindMountPrefix(existing);
+      existing.Changing += OnChanging;
+      existing.Changed += OnChanged;
+    }
+
     public Guid Id => Description.Id;
 
     public ServerDescription Description { get; }

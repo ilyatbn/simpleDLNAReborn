@@ -19,6 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\admin\admin.csproj" />
     <ProjectReference Include="..\fsserver\fsserver.csproj" />
     <ProjectReference Include="..\server\server.csproj" />
     <ProjectReference Include="..\util\util.csproj" />

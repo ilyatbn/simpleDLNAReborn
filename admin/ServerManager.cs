@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using log4net;
+using NMaier.SimpleDlna.FileMediaServer;
 using NMaier.SimpleDlna.Server;
 
 namespace NMaier.SimpleDlna.Admin
@@ -39,6 +40,35 @@ namespace NMaier.SimpleDlna.Admin
     public DescriptorStore Store { get; }
 
     public ServerManagerOptions Options { get; }
+
+    /// <summary>
+    ///   When false, <see cref="Save" /> does nothing. The console adopts
+    ///   command-line servers and must never write them over the descriptors
+    ///   file the tray host owns.
+    /// </summary>
+    public bool Persist { get; set; } = true;
+
+    /// <summary>
+    ///   Registers an already-built, already-mounted server so it shows up in
+    ///   the API. Used by the console in command-line mode.
+    /// </summary>
+    public ManagedServer Adopt(FileServer fileServer,
+      ServerDescription description)
+    {
+      if (fileServer == null) {
+        throw new ArgumentNullException(nameof(fileServer));
+      }
+      Normalize(description);
+      description.Active = true;
+      description.EnsureId();
+      ManagedServer rv;
+      lock (sync) {
+        rv = new ManagedServer(this, description, fileServer);
+        servers.Add(rv);
+      }
+      OnListChanged();
+      return rv;
+    }
 
     /// <summary>Raised on every state transition, from arbitrary threads.</summary>
     public event EventHandler<ServerStateChangedEventArgs> StateChanged;
@@ -277,6 +307,9 @@ namespace NMaier.SimpleDlna.Admin
 
     public void Save()
     {
+      if (!Persist) {
+        return;
+      }
       Store.Save(Servers.Select(s => s.Description));
     }
 

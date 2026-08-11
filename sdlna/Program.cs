@@ -5,6 +5,9 @@ using System.Text;
 using System.Threading;
 using log4net;
 using NMaier.GetOptNet;
+using NMaier.SimpleDlna.Admin;
+using NMaier.SimpleDlna.Admin.Api;
+using NMaier.SimpleDlna.Admin.Http;
 using NMaier.SimpleDlna.FileMediaServer;
 using NMaier.SimpleDlna.Properties;
 using NMaier.SimpleDlna.Server;
@@ -96,7 +99,7 @@ namespace NMaier.SimpleDlna
           ListOrders();
           return;
         }
-        if (options.Directories.Length == 0) {
+        if (options.Directories.Length == 0 && !options.Managed) {
           throw new GetOptException("No directories specified");
         }
 
@@ -126,32 +129,66 @@ namespace NMaier.SimpleDlna
               }
 
               var friendlyName = "sdlna";
+              var settings = new SettingsStore(Paths.SettingsFile);
+              var manager = new ServerManager(
+                server,
+                new DescriptorStore(Paths.DescriptorsFile),
+                new ServerManagerOptions
+                {
+                  CacheFile = options.CacheFile,
+                  ChangeDelay = TimeSpan.FromSeconds(
+                    Math.Max(options.RescanDelay, 1)),
+                  RescanInterval = TimeSpan.FromMinutes(
+                    Math.Max(options.RescanInterval, 0))
+                });
 
-              if (options.Seperate) {
-                foreach (var d in options.Directories) {
-                  server.InfoFormat("Mounting FileServer for {0}", d.FullName);
-                  var fs = SetupFileServer(
-                    options, types, new[] {d});
-                  friendlyName = fs.FriendlyName;
-                  server.RegisterMediaServer(fs);
-                  server.NoticeFormat("{0} mounted", d.FullName);
-                }
+              if (options.Managed) {
+                // Servers come from descriptors.xml, exactly as the tray host
+                // loads them, and the API may change them.
+                manager.Load();
+                friendlyName = "SimpleDLNA";
+                server.NoticeFormat(
+                  "{0} server(s) loaded from {1}",
+                  manager.Servers.Count, Paths.DescriptorsFile);
               }
               else {
-                server.InfoFormat(
-                  "Mounting FileServer for {0} ({1})",
-                  options.Directories[0], options.Directories.Length);
-                var fs = SetupFileServer(options, types, options.Directories);
-                friendlyName = fs.FriendlyName;
-                server.RegisterMediaServer(fs);
-                server.NoticeFormat(
-                  "{0} ({1}) mounted",
-                  options.Directories[0], options.Directories.Length);
+                // Command-line servers: mounted here, adopted by the manager so
+                // they are visible through the API, never written to disk.
+                manager.Persist = false;
+                if (options.Seperate) {
+                  foreach (var d in options.Directories) {
+                    server.InfoFormat(
+                      "Mounting FileServer for {0}", d.FullName);
+                    var fs = SetupFileServer(options, types, new[] {d});
+                    friendlyName = fs.FriendlyName;
+                    server.RegisterMediaServer(fs);
+                    manager.Adopt(
+                      fs, DescribeCli(options, types, new[] {d}, fs));
+                    server.NoticeFormat("{0} mounted", d.FullName);
+                  }
+                }
+                else {
+                  server.InfoFormat(
+                    "Mounting FileServer for {0} ({1})",
+                    options.Directories[0], options.Directories.Length);
+                  var fs = SetupFileServer(options, types, options.Directories);
+                  friendlyName = fs.FriendlyName;
+                  server.RegisterMediaServer(fs);
+                  manager.Adopt(
+                    fs, DescribeCli(options, types, options.Directories, fs));
+                  server.NoticeFormat(
+                    "{0} ({1}) mounted",
+                    options.Directories[0], options.Directories.Length);
+                }
               }
 
               Console.Title = $"{friendlyName} - running ...";
 
-              Run(server);
+              using (var admin = StartAdmin(options, server, manager,
+                settings)) {
+                Run(server, admin);
+              }
+              manager.Dispose();
             }
           }
           finally {
@@ -170,8 +207,65 @@ namespace NMaier.SimpleDlna
 #endif
     }
 
-    private static void Run(HttpServer server)
+    /// <summary>
+    ///   Starts the loopback admin interface, or returns null when it is
+    ///   disabled or the port is taken. A busy port is a warning, never a
+    ///   reason to refuse to serve media.
+    /// </summary>
+    private static AdminHost StartAdmin(Options options, HttpServer server,
+      ServerManager manager, SettingsStore settings)
     {
+      if (options.NoAdmin) {
+        return null;
+      }
+      try {
+        var host = new AdminHost(new AdminContext
+        {
+          Http = server,
+          Manager = manager,
+          Settings = settings,
+          Managed = options.Managed,
+          HostKind = "console"
+        }, options.AdminPort);
+        return host;
+      }
+      catch (AdminServerBindException ex) {
+        server.Error(ex.Message, ex);
+        return null;
+      }
+      catch (Exception ex) {
+        server.Error("Failed to start the admin interface", ex);
+        return null;
+      }
+    }
+
+    /// <summary>
+    ///   A read-only description of a command-line server, so the API can show
+    ///   it the same way it shows a managed one.
+    /// </summary>
+    private static ServerDescription DescribeCli(Options options,
+      DlnaMediaTypes types, DirectoryInfo[] dirs, FileServer fs)
+    {
+      return new ServerDescription
+      {
+        Name = fs.FriendlyName,
+        Active = true,
+        Order = options.Order,
+        OrderDescending = options.DescendingOrder,
+        Types = types,
+        Views = options.Views ?? new string[0],
+        Directories = dirs.Select(d => d.FullName).ToArray(),
+        Ips = options.Ips ?? new string[0],
+        Macs = options.Macs ?? new string[0],
+        UserAgents = options.UserAgents ?? new string[0]
+      };
+    }
+
+    private static void Run(HttpServer server, AdminHost admin)
+    {
+      if (admin != null) {
+        server.NoticeFormat("Web interface: {0}", admin.Url);
+      }
       server.Info("CTRL-C to terminate");
       blockEvent.WaitOne();
 

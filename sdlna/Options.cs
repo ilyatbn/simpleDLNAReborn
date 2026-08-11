@@ -32,6 +32,12 @@ namespace NMaier.SimpleDlna
 
     [Argument("list-views", HelpText = "List all available views")] [FlagArgument(true)] public bool ListViews = false;
 
+    [Argument("managed", HelpText = "Manage servers through the web interface instead of the command line; directory arguments are ignored")] [FlagArgument(true)] public bool Managed = false;
+
+    [Argument("no-admin", HelpText = "Do not start the local web interface")] [FlagArgument(true)] public bool NoAdmin = false;
+
+    [Argument("admin-port", HelpVar = "port", HelpText = "Port for the local web interface (default: 19199)")] public int AdminPort = 19199;
+
     [Argument("log-file", HelpText = "Log to specified file as well (default: none)", HelpVar = "File")] public FileInfo
       LogFile = null;
 
