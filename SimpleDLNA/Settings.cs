@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Configuration;
+using NMaier.SimpleDlna.Admin;
 
 namespace NMaier.SimpleDlna.GUI.Properties
 {

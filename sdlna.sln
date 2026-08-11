@@ -17,6 +17,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NMaier.Windows.Forms", "NMa
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SimpleDLNA", "SimpleDLNA\SimpleDLNA.csproj", "{04572B26-5F25-43AE-A395-77DEBB942376}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "admin", "admin\admin.csproj", "{F99EEAF9-C43A-42B3-AF31-FAA7A32A7F21}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -111,6 +113,18 @@ Global
 		{04572B26-5F25-43AE-A395-77DEBB942376}.Release|x64.Build.0 = Release|Any CPU
 		{04572B26-5F25-43AE-A395-77DEBB942376}.Release|x86.ActiveCfg = Release|Any CPU
 		{04572B26-5F25-43AE-A395-77DEBB942376}.Release|x86.Build.0 = Release|Any CPU
+		{F99EEAF9-C43A-42B3-AF31-FAA7A32A7F21}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F99EEAF9-C43A-42B3-AF31-FAA7A32A7F21}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F99EEAF9-C43A-42B3-AF31-FAA7A32A7F21}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{F99EEAF9-C43A-42B3-AF31-FAA7A32A7F21}.Debug|x64.Build.0 = Debug|Any CPU
+		{F99EEAF9-C43A-42B3-AF31-FAA7A32A7F21}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{F99EEAF9-C43A-42B3-AF31-FAA7A32A7F21}.Debug|x86.Build.0 = Debug|Any CPU
+		{F99EEAF9-C43A-42B3-AF31-FAA7A32A7F21}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F99EEAF9-C43A-42B3-AF31-FAA7A32A7F21}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F99EEAF9-C43A-42B3-AF31-FAA7A32A7F21}.Release|x64.ActiveCfg = Release|Any CPU
+		{F99EEAF9-C43A-42B3-AF31-FAA7A32A7F21}.Release|x64.Build.0 = Release|Any CPU
+		{F99EEAF9-C43A-42B3-AF31-FAA7A32A7F21}.Release|x86.ActiveCfg = Release|Any CPU
+		{F99EEAF9-C43A-42B3-AF31-FAA7A32A7F21}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Linq;
 using System.Net;
 using System.Windows.Forms;
+using NMaier.SimpleDlna.Admin;
 using NMaier.SimpleDlna.GUI.Properties;
 using NMaier.SimpleDlna.Server;
 using NMaier.SimpleDlna.Server.Comparers;

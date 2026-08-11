@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <RootNamespace>NMaier.SimpleDlna.Admin</RootNamespace>
+    <AssemblyName>SimpleDlna.Admin</AssemblyName>
+    <AssemblyTitle>SimpleDLNA administration API</AssemblyTitle>
+    <Description>Server management, settings and the loopback admin API</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="log4net" Version="3.3.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\fsserver\fsserver.csproj" />
+    <ProjectReference Include="..\server\server.csproj" />
+    <ProjectReference Include="..\util\util.csproj" />
+  </ItemGroup>
+
+</Project>

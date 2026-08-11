@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -8,13 +7,13 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using System.Xml.Serialization;
 using log4net;
 using log4net.Appender;
 using log4net.Config;
 using log4net.Core;
 using log4net.Layout;
 using log4net.Repository.Hierarchy;
+using NMaier.SimpleDlna.Admin;
 using NMaier.SimpleDlna.GUI.Properties;
 using NMaier.SimpleDlna.Server;
 using NMaier.SimpleDlna.Utilities;
@@ -42,6 +41,8 @@ namespace NMaier.SimpleDlna.GUI
     private bool minimized = config.startminimized;
 
     private HttpServer httpServer;
+
+    private ServerManager manager;
 
     private readonly SleepInhibitor sleepInhibitor = new SleepInhibitor();
 
@@ -188,11 +189,8 @@ namespace NMaier.SimpleDlna.GUI
         var rv = ns.ShowDialog();
         if (rv == DialogResult.OK) {
           var desc = ns.Description;
-          Task.Factory.StartNew(() =>
-          {
-            item.UpdateInfo(desc);
-            BeginInvoke((Action)SaveConfig);
-          });
+          var id = item.Server.Id;
+          Task.Factory.StartNew(() => manager.Update(id, desc));
         }
       }
     }
@@ -202,11 +200,8 @@ namespace NMaier.SimpleDlna.GUI
       using (var ns = new FormServer()) {
         var rv = ns.ShowDialog();
         if (rv == DialogResult.OK) {
-          var item = new ServerListViewItem(
-            httpServer, cacheFile, ns.Description);
-          listDescriptions.Items.Add(item);
-          item.Load();
-          SaveConfig();
+          var desc = ns.Description;
+          Task.Factory.StartNew(() => manager.Add(desc));
         }
       }
     }
@@ -225,11 +220,8 @@ namespace NMaier.SimpleDlna.GUI
       if (dr != DialogResult.Yes) {
         return;
       }
-      if (item.Description.Active) {
-        item.Toggle();
-      }
-      listDescriptions.Items.Remove(item);
-      SaveConfig();
+      var id = item.Server.Id;
+      Task.Factory.StartNew(() => manager.Remove(id));
     }
 
     private void buttonRescan_Click(object sender, EventArgs e)
@@ -239,7 +231,7 @@ namespace NMaier.SimpleDlna.GUI
         if (item == null) {
           return;
         }
-        item.Rescan();
+        item.Server.Rescan();
       }
       catch (Exception ex) {
         MessageBox.Show(
@@ -254,19 +246,19 @@ namespace NMaier.SimpleDlna.GUI
       if (item == null) {
         return;
       }
+      var id = item.Server.Id;
       Task.Factory.StartNew(() =>
       {
-        item.Toggle();
-        BeginInvoke((Action)(() =>
+        manager.Toggle(id);
+        SafeInvoke(() =>
         {
-          SaveConfig();
           ctxStartStop.Text = buttonStartStop.Text =
             item.Description.Active ? "Stop" : "Start";
           ctxStartStop.Image = buttonStartStop.Image =
             item.Description.Active
               ? Resources.inactive
               : Resources.active;
-        }));
+        });
       });
     }
 
@@ -281,25 +273,7 @@ namespace NMaier.SimpleDlna.GUI
       if (res != DialogResult.Yes) {
         return;
       }
-      var running = (from ServerListViewItem item in listDescriptions.Items
-                     where item.Description.Active
-                     select item).ToList();
-      foreach (var item in running) {
-        item.Toggle();
-      }
-      try {
-        if (cacheFile.Exists) {
-          cacheFile.Delete();
-        }
-      }
-      catch (Exception ex) {
-        log.Error(
-          $"Failed to remove cache file {cacheFile.FullName}",
-          ex);
-      }
-      foreach (var item in running) {
-        item.Toggle();
-      }
+      Task.Factory.StartNew(() => manager.DropCache());
     }
 
     private void exitContextMenuItem_Click(object sender, EventArgs e)
@@ -313,6 +287,12 @@ namespace NMaier.SimpleDlna.GUI
     {
       Text = "Going down...";
       httpServer.Playback.Changed -= PlaybackChanged;
+      if (manager != null) {
+        manager.ListChanged -= ManagerListChanged;
+        manager.StateChanged -= ManagerStateChanged;
+        manager.Dispose();
+        manager = null;
+      }
       httpServer.Dispose();
       httpServer = null;
       // Releases the wake request; the machine can sleep normally again.
@@ -378,47 +358,45 @@ namespace NMaier.SimpleDlna.GUI
       }
     }
 
+    /// <summary>
+    ///   Loads and starts servers off the UI thread. Rows appear as soon as the
+    ///   descriptions are read; scanning happens behind them.
+    /// </summary>
     private void LoadConfig()
     {
-      var descs = LoadDescriptors();
-      if (descs == null) {
-        throw new ArgumentException("Failed to load config");
-      }
-      var items = new List<ListViewItem>();
-      items.AddRange(descs.ToArray());
-      listDescriptions.Items.AddRange(items.ToArray());
-
       Task.Factory.StartNew(() =>
       {
-        var po = new ParallelOptions
+        try {
+          manager.Load(LegacyDescriptors());
+        }
+        catch (Exception ex) {
+          log.Error("Failed to load the server configuration", ex);
+          return;
+        }
+        SafeInvoke(() =>
         {
-          MaxDegreeOfParallelism = Math.Min(2, Environment.ProcessorCount)
-        };
-        Parallel.ForEach(descs, po, i => { i.Load(); });
-        BeginInvoke((Action)(() =>
-        {
-          config.Descriptors.Clear();
-          SaveConfig();
-        }));
+          try {
+            // One-way migration: once descriptors.xml exists, the copy that
+            // used to live in user.config is dead weight.
+            config.Descriptors?.Clear();
+            config.Save();
+          }
+          catch (Exception) {
+            // ignored
+          }
+        });
       });
     }
 
-    private ServerListViewItem[] LoadDescriptors()
+    private static System.Collections.Generic.IEnumerable<ServerDescription>
+      LegacyDescriptors()
     {
-      List<ServerDescription> rv;
       try {
-        var serializer = new XmlSerializer(typeof (List<ServerDescription>));
-        using (var reader = new StreamReader(
-          Path.Combine(CacheDir, DESCRIPTOR_FILE))) {
-          rv = serializer.Deserialize(reader) as List<ServerDescription>;
-        }
+        return config.Descriptors;
       }
       catch (Exception) {
-        rv = config.Descriptors;
+        return null;
       }
-      return (from d in rv
-              let i = new ServerListViewItem(httpServer, cacheFile, d)
-              select i).ToArray();
     }
 
     private void notifyContext_Opening(object sender,
@@ -450,7 +428,7 @@ namespace NMaier.SimpleDlna.GUI
         menuItem.Click += (s, a) =>
         {
           try {
-            innerItem.Rescan();
+            innerItem.Server.Rescan();
           }
           catch (Exception) {
             // no op
@@ -514,35 +492,7 @@ namespace NMaier.SimpleDlna.GUI
 
     private void rescanAllContextMenuItem_Click(object sender, EventArgs e)
     {
-      foreach (ServerListViewItem l in listDescriptions.Items) {
-        try {
-          l.Rescan();
-        }
-        catch (Exception) {
-          // no op
-        }
-      }
-    }
-
-    private void SaveConfig()
-    {
-      try {
-        var descs = (from ServerListViewItem item in listDescriptions.Items
-                     select item.Description).ToArray();
-        var serializer = new XmlSerializer(descs.GetType());
-        var file = new FileInfo(
-          Path.Combine(CacheDir, DESCRIPTOR_FILE + ".tmp"));
-        using (var writer = new StreamWriter(file.FullName)) {
-          serializer.Serialize(writer, descs);
-        }
-        var outfile = Path.Combine(CacheDir, DESCRIPTOR_FILE);
-        File.Copy(file.FullName, outfile, true);
-        file.Delete();
-      }
-      catch (Exception ex) {
-        log.Error("Failed to write descriptors", ex);
-      }
-      config.Save();
+      Task.Factory.StartNew(() => manager.RescanAll());
     }
 
     private void settingsToolStripMenuItem_Click(object sender, EventArgs e)
@@ -551,6 +501,12 @@ namespace NMaier.SimpleDlna.GUI
         settings.ShowDialog();
         config.Save();
         SetupLogging();
+        // Picked up by the next server start, matching the dialog's
+        // "(Applies when a server is restarted)" wording.
+        manager.Options.ChangeDelay =
+          TimeSpan.FromSeconds((double)config.rescandelay);
+        manager.Options.RescanInterval =
+          TimeSpan.FromMinutes((double)config.rescaninterval);
       }
     }
 
@@ -632,8 +588,98 @@ namespace NMaier.SimpleDlna.GUI
     private void SetupServer()
     {
       httpServer = new HttpServer((int)config.port);
+      manager = new ServerManager(
+        httpServer,
+        new DescriptorStore(Path.Combine(CacheDir, DESCRIPTOR_FILE)),
+        new ServerManagerOptions
+        {
+#if DEBUG
+          CacheFile = null,
+#else
+          CacheFile = cacheFile,
+#endif
+          ChangeDelay = TimeSpan.FromSeconds((double)config.rescandelay),
+          RescanInterval =
+            TimeSpan.FromMinutes((double)config.rescaninterval)
+        });
+      manager.ListChanged += ManagerListChanged;
+      manager.StateChanged += ManagerStateChanged;
       LoadConfig();
       Text = $"{Text} - Port {httpServer.RealPort}";
+    }
+
+    /// <summary>
+    ///   Runs an action on the UI thread, tolerating a shutdown race.
+    /// </summary>
+    private void SafeInvoke(Action action)
+    {
+      if (!IsHandleCreated || IsDisposed) {
+        return;
+      }
+      try {
+        BeginInvoke(action);
+      }
+      catch (ObjectDisposedException) {
+      }
+      catch (InvalidOperationException) {
+      }
+    }
+
+    private void ManagerListChanged(object sender, EventArgs e)
+    {
+      SafeInvoke(RebuildList);
+    }
+
+    private void ManagerStateChanged(object sender,
+      ServerStateChangedEventArgs e)
+    {
+      SafeInvoke(() =>
+      {
+        var item = (from ServerListViewItem i in listDescriptions.Items
+                    where ReferenceEquals(i.Server, e.Server)
+                    select i).FirstOrDefault();
+        if (item == null) {
+          return;
+        }
+        item.Render();
+        AutoSizeColumns();
+        ListDescriptions_SelectedIndexChanged(null, EventArgs.Empty);
+      });
+    }
+
+    private void RebuildList()
+    {
+      var selected =
+        (listDescriptions.SelectedItems.Count != 0
+          ? listDescriptions.SelectedItems[0] as ServerListViewItem
+          : null)?.Server;
+
+      listDescriptions.BeginUpdate();
+      try {
+        listDescriptions.Items.Clear();
+        foreach (var s in manager.Servers) {
+          var item = new ServerListViewItem(s);
+          listDescriptions.Items.Add(item);
+          if (ReferenceEquals(s, selected)) {
+            item.Selected = true;
+          }
+        }
+      }
+      finally {
+        listDescriptions.EndUpdate();
+      }
+      AutoSizeColumns();
+      ListDescriptions_SelectedIndexChanged(null, EventArgs.Empty);
+    }
+
+    private void AutoSizeColumns()
+    {
+      var mode = listDescriptions.Items.Count == 0
+        ? ColumnHeaderAutoResizeStyle.HeaderSize
+        : ColumnHeaderAutoResizeStyle.ColumnContent;
+      foreach (var c in listDescriptions.Columns) {
+        ((ColumnHeader)c).AutoResize(mode);
+      }
     }
 
     private void StartPipeNotification()
