@@ -1,18 +1,18 @@
-SimplerDLNA
+SimplerDLNA Reborn
 ===
-SimpleDLNA, better, faster, stronger.
+SimpleDLNA, better, faster, stronger. more modern.
 
 A zero-config DLNA/UPnP-AV media server for Windows, managed from a web
 interface.
 
 Main changes:
 - upgraded to .net framework 10
-- way better performance.
+- better performance.
 - fully portable.
 - implemented proper refreshing mechanisms for changes in folders.
-- **replaced the WinForms GUI with a web interface** at
-  http://localhost:19199/, backed by a REST API.
+- Full REST API + Web management interface.
 - other bug fixes and ui changes.
+
 
 Managing it
 ---

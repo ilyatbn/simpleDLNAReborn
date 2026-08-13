@@ -3,6 +3,25 @@ name: Build and Release
 on:
   push:
     branches: [master]
+    # Only build and cut a release when something that ends up in the binaries
+    # changes. Doc-only pushes (Readme.md, modernization.md, TODO.md, …), the
+    # dead setup/ installer project and the unreferenced root assets/ folder do
+    # not. workflow_dispatch ignores this filter, so a manual run always builds.
+    paths:
+      - 'admin/**'
+      - 'fsserver/**'
+      - 'sdlna/**'
+      - 'server/**'
+      - 'SimpleDLNA/**'
+      - 'thumbs/**'
+      - 'util/**'
+      - 'web/**'
+      - 'sdlna.sln'
+      - 'sdlna.key.snk'
+      - 'Directory.Build.props'
+      - '.editorconfig'
+      # Notes that happen to live next to code (web/CLAUDE.md and friends).
+      - '!**/*.md'
   workflow_dispatch:
     inputs:
       prerelease:
