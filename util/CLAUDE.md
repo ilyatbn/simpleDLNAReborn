@@ -10,6 +10,9 @@ nothing in the repo. Keep it that way.
 | Base class that gives a type `Debug`/`InfoFormat`/`Error` etc. | `Logging.cs` |
 | Open/pool the metadata SQLite connection | `Sqlite.cs` |
 | Copy one stream into another asynchronously | `StreamPump.cs` |
+| Cap a stream at N bytes (bounded HTTP ranges) | `LimitedStream.cs` |
+| Read several streams as one (headers + body) | `ConcatenatedStream.cs` |
+| Detect a network change (IP / gateway / SSID) | `NetworkMonitor.cs`, `Wlan.cs` |
 | Pooled `MemoryStream`s (RecyclableMemoryStream) | `StreamManager.cs` |
 | Shell out to ffmpeg / probe for it on PATH | `Ffmpeg.cs` |
 | Seekable HTTP-backed stream | `HttpStream.cs` |
@@ -19,6 +22,27 @@ nothing in the repo. Keep it that way.
 | LRU cache used for covers and thumbnails | `LeastRecentlyUsedDictionary.cs` |
 | Assembly title/version/copyright readback | `ProductInformation.cs` |
 | Keep the machine awake | `SleepInhibitor.cs` |
+
+## The stream trio (2026-09)
+
+`StreamPump` + `ConcatenatedStream` + `LimitedStream` are what an HTTP response
+body travels through. Three things about them are deliberate:
+
+- **`StreamPump` is double buffered.** It reads the next block while writing
+  the current one. It used to be strictly serial, so the disk idled for the
+  whole of every socket write. Measured 550 → 1290 MB/s over loopback.
+- **It uses `ReadAsync`, not `BeginRead`.** A stream that does not override
+  `BeginRead` gets the default, which runs synchronous `Read` on a pool thread
+  — and `FileReadStream` is opened `FileOptions.Asynchronous`, where a
+  synchronous read is the documented slow path. So `ConcatenatedStream`
+  overrides `ReadAsync`; any stream added to the chain should too.
+- **`LimitedStream` is not optional.** The pump copies until EOF, so whatever
+  it is handed *is* the response body. A bounded `Range` is only bounded
+  because `HttpClient.ProcessRanges` wraps the body in one.
+
+`ConcatenatedStream.Advance` closes the exhausted stream as well as disposing
+it. `FileReadStream.Close()` is what recycles a handle into `FileStreamCache`;
+disposing alone leaked it.
 
 ## Gotchas
 

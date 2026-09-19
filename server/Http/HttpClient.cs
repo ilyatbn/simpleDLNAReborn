@@ -16,36 +16,37 @@ namespace NMaier.SimpleDlna.Server
 
     private const string CRLF = "\r\n";
 
+    /// <summary>Group 1 = suffix form, 2 and 3 = start and optional end.</summary>
     private static readonly Regex bytes =
-      new Regex(@"^bytes=(\d+)(?:-(\d+)?)?$", RegexOptions.Compiled);
+      new Regex(@"^bytes=(?:-(\d+)|(\d+)-(\d*))$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    private static readonly IHandler error403 =
-      new StaticHandler(new StringResponse(
-                          HttpCode.Denied,
-                          "<!doctype html><title>Access denied!</title><h1>Access denied!</h1><p>You're not allowed to access the requested resource.</p>"
-                          )
-        );
-
-    private static readonly IHandler error404 =
-      new StaticHandler(new StringResponse(
-                          HttpCode.NotFound,
-                          "<!doctype html><title>Not found!</title><h1>Not found!</h1><p>The requested resource was not found!</p>"
-                          )
-        );
-
-    private static readonly IHandler error416 =
-      new StaticHandler(new StringResponse(
-                          HttpCode.RangeNotSatisfiable,
-                          "<!doctype html><title>Requested Range not satisfiable!</title><h1>Requested Range not satisfiable!</h1><p>Nice try, but do not try again :p</p>"
-                          )
-        );
-
-    private static readonly IHandler error500 =
-      new StaticHandler(new StringResponse(
-                          HttpCode.InternalError,
-                          "<!doctype html><title>Internal Server Error</title><h1>Internal Server Error</h1><p>Something is very rotten in the State of Denmark!</p>"
-                          )
-        );
+    /// <summary>A fresh error response; never shared between connections.</summary>
+    private static IResponse Error(HttpCode code)
+    {
+      switch (code) {
+      case HttpCode.Denied:
+        return new StringResponse(
+          HttpCode.Denied,
+          "<!doctype html><title>Access denied!</title><h1>Access denied!</h1><p>You're not allowed to access the requested resource.</p>"
+          );
+      case HttpCode.RangeNotSatisfiable:
+        return new StringResponse(
+          HttpCode.RangeNotSatisfiable,
+          "<!doctype html><title>Requested Range not satisfiable!</title><h1>Requested Range not satisfiable!</h1><p>Nice try, but do not try again :p</p>"
+          );
+      case HttpCode.InternalError:
+        return new StringResponse(
+          HttpCode.InternalError,
+          "<!doctype html><title>Internal Server Error</title><h1>Internal Server Error</h1><p>Something is very rotten in the State of Denmark!</p>"
+          );
+      default:
+        return new StringResponse(
+          HttpCode.NotFound,
+          "<!doctype html><title>Not found!</title><h1>Not found!</h1><p>The requested resource was not found!</p>"
+          );
+      }
+    }
 
     private readonly byte[] buffer = new byte[2048];
 
@@ -65,6 +66,9 @@ namespace NMaier.SimpleDlna.Server
 
     private bool hasHeaders;
 
+    /// <summary>Client sent bytes past this request; the connection cannot be reused.</summary>
+    private bool pipelined;
+
     private DateTime lastActivity;
 
     private MemoryStream readStream;
@@ -72,6 +76,9 @@ namespace NMaier.SimpleDlna.Server
     private uint requestCount;
 
     private IResponse response;
+
+    /// <summary>Version off the request line; decides the default persistence.</summary>
+    private string protocol = "HTTP/1.1";
 
     private HttpStates state;
 
@@ -84,6 +91,12 @@ namespace NMaier.SimpleDlna.Server
       client = aClient;
       stream = client.GetStream();
       client.Client.UseOnlyOverlappedIO = true;
+      try {
+        client.NoDelay = true;
+      }
+      catch (Exception ex) {
+        Debug("Could not disable Nagle", ex);
+      }
 
       RemoteEndpoint = client.Client.RemoteEndPoint as IPEndPoint;
       LocalEndPoint = client.Client.LocalEndPoint as IPEndPoint;
@@ -136,18 +149,19 @@ namespace NMaier.SimpleDlna.Server
 
     public IPEndPoint RemoteEndpoint { get; }
 
-    private long GetContentLengthFromStream(Stream responseBody)
+    private static long GetContentLengthFromStream(IHeaders headers,
+      Stream responseBody)
     {
       long contentLength = -1;
       try {
         string clf;
-        if (!response.Headers.TryGetValue("Content-Length", out clf) ||
+        if (!headers.TryGetValue("Content-Length", out clf) ||
             !long.TryParse(clf, out contentLength)) {
           contentLength = responseBody.Length - responseBody.Position;
           if (contentLength < 0) {
             throw new InvalidDataException();
           }
-          response.Headers["Content-Length"] = contentLength.ToString();
+          headers["Content-Length"] = contentLength.ToString();
         }
       }
       catch (Exception) {
@@ -156,52 +170,86 @@ namespace NMaier.SimpleDlna.Server
       return contentLength;
     }
 
-    private Stream ProcessRanges(IResponse rangedResponse, ref HttpCode status)
+    /// <summary>
+    ///   Applies the request Range to the response and returns the body the
+    ///   client should receive, capped to Content-Length. Writes only into
+    ///   <paramref name="headers" />, never the response, which may be shared.
+    /// </summary>
+    private Stream ProcessRanges(IHeaders headers, ref HttpCode status)
     {
-      var responseBody = rangedResponse.Body;
-      var contentLength = GetContentLengthFromStream(responseBody);
+      var responseBody = response.Body;
+      var totalLength = GetContentLengthFromStream(headers, responseBody);
+
+      string requested;
+      if (!Headers.TryGetValue("Range", out requested)) {
+        return responseBody;
+      }
+      if (status != HttpCode.Ok || totalLength < 0 || !responseBody.CanSeek) {
+        return responseBody;
+      }
+
       try {
-        string ar;
-        if (status != HttpCode.Ok && contentLength > 0 ||
-            !Headers.TryGetValue("Range", out ar)) {
+        var m = bytes.Match(requested.Trim());
+        if (!m.Success) {
+          DebugFormat("{0} - Ignoring unparsable range {1}", this, requested);
           return responseBody;
         }
-        var m = bytes.Match(ar);
-        if (!m.Success) {
-          throw new InvalidDataException("Not parsed!");
-        }
-        var totalLength = contentLength;
+
         long start;
         long end;
-        if (!long.TryParse(m.Groups[1].Value, out start) || start < 0) {
-          throw new InvalidDataException("Not parsed");
-        }
-        if (m.Groups.Count != 3 ||
-            !long.TryParse(m.Groups[2].Value, out end) ||
-            end <= start || end >= totalLength) {
+        var suffix = m.Groups[1].Value;
+        if (suffix.Length != 0) {
+          long fromEnd;
+          if (!long.TryParse(suffix, out fromEnd) || fromEnd <= 0) {
+            return Unsatisfiable(responseBody, totalLength, ref status);
+          }
+          start = Math.Max(0, totalLength - fromEnd);
           end = totalLength - 1;
         }
-        if (start >= end) {
-          responseBody.Close();
-          rangedResponse = error416.HandleRequest(this);
-          return rangedResponse.Body;
+        else {
+          if (!long.TryParse(m.Groups[2].Value, out start) || start < 0) {
+            return Unsatisfiable(responseBody, totalLength, ref status);
+          }
+          var last = m.Groups[3].Value;
+          if (last.Length == 0 || !long.TryParse(last, out end)) {
+            // "bytes=N-": everything from N on.
+            end = totalLength - 1;
+          }
+          else if (end >= totalLength) {
+              end = totalLength - 1;
+          }
         }
 
-        if (start > 0) {
-          responseBody.Seek(start, SeekOrigin.Current);
+        if (start >= totalLength || end < start) {
+          return Unsatisfiable(responseBody, totalLength, ref status);
         }
-        contentLength = end - start + 1;
-        rangedResponse.Headers["Content-Length"] = contentLength.ToString();
-        rangedResponse.Headers.Add(
-          "Content-Range",
-          $"bytes {start}-{end}/{totalLength}"
-          );
+
+        responseBody.Seek(start, SeekOrigin.Begin);
+
+        var contentLength = end - start + 1;
+        headers["Content-Length"] = contentLength.ToString();
+        headers["Content-Range"] = $"bytes {start}-{end}/{totalLength}";
         status = HttpCode.Partial;
+        return new LimitedStream(responseBody, contentLength);
       }
       catch (Exception ex) {
         Warn($"{this} - Failed to process range request!", ex);
+        return responseBody;
       }
-      return responseBody;
+    }
+
+    /// <summary>Swaps in a complete 416: status, body and Content-Range.</summary>
+    private Stream Unsatisfiable(Stream responseBody, long totalLength,
+      ref HttpCode status)
+    {
+      DebugFormat(
+        "{0} - Unsatisfiable range over {1} bytes", this, totalLength);
+      responseBody.Close();
+      responseBody.Dispose();
+      response = Error(HttpCode.RangeNotSatisfiable);
+      response.Headers["Content-Range"] = $"bytes */{totalLength}";
+      status = response.Status;
+      return response.Body;
     }
 
     private void Read()
@@ -225,8 +273,11 @@ namespace NMaier.SimpleDlna.Server
 
       try {
         var read = stream.EndRead(result);
-        if (read < 0) {
-          throw new HttpException("Client did not send anything");
+        if (read <= 0) {
+          // Zero is a graceful close, not a zero-length read.
+          DebugFormat("{0} - Client closed the connection", this);
+          Close();
+          return;
         }
         DebugFormat("{0} - Read {1} bytes", this, read);
         readStream.Write(buffer, 0, read);
@@ -242,6 +293,11 @@ namespace NMaier.SimpleDlna.Server
 
       try {
         if (!hasHeaders) {
+          // Re-parsed from the top on every read, so anything a partial pass
+          // already picked up has to go first.
+          Method = null;
+          Path = null;
+          Headers.Clear();
           readStream.Seek(0, SeekOrigin.Begin);
           var reader = new StreamReader(readStream);
           for (var line = reader.ReadLine();
@@ -250,15 +306,24 @@ namespace NMaier.SimpleDlna.Server
             line = line.Trim();
             if (string.IsNullOrEmpty(line)) {
               hasHeaders = true;
+              // The reader has already buffered this out of readStream.
+              var trailing = reader.ReadToEnd();
               readStream = StreamManager.GetStream();
-              if (Headers.ContainsKey("content-length") &&
-                  uint.TryParse(Headers["content-length"], out bodyBytes)) {
+              string cl;
+              if (Headers.TryGetValue("content-length", out cl) &&
+                  uint.TryParse(cl, out bodyBytes)) {
                 if (bodyBytes > 1 << 20) {
                   throw new IOException("Body too long");
                 }
-                var ascii = Encoding.ASCII.GetBytes(reader.ReadToEnd());
+                var ascii = Encoding.ASCII.GetBytes(trailing);
                 readStream.Write(ascii, 0, ascii.Length);
                 DebugFormat("Must read body bytes {0}", bodyBytes);
+              }
+              else if (trailing.Length != 0) {
+                DebugFormat(
+                  "{0} - {1} pipelined byte(s); not reusing the connection",
+                  this, trailing.Length);
+                pipelined = true;
               }
               break;
             }
@@ -266,6 +331,9 @@ namespace NMaier.SimpleDlna.Server
               var parts = line.Split(new[] {' '}, 3);
               Method = parts[0].Trim().ToUpperInvariant();
               Path = parts[1].Trim();
+              protocol = parts.Length > 2
+                ? parts[2].Trim().ToUpperInvariant()
+                : "HTTP/1.0";
               DebugFormat("{0} - {1} request for {2}", this, Method, Path);
             }
             else {
@@ -273,6 +341,11 @@ namespace NMaier.SimpleDlna.Server
               Headers[parts[0]] = Uri.UnescapeDataString(parts[1]).Trim();
             }
           }
+        }
+        if (!hasHeaders) {
+          DebugFormat("{0} - Headers incomplete, reading on", this);
+          Read();
+          return;
         }
         if (bodyBytes != 0 && bodyBytes > readStream.Length) {
           DebugFormat(
@@ -289,7 +362,7 @@ namespace NMaier.SimpleDlna.Server
       }
       catch (Exception ex) {
         Warn($"{this} - Failed to process request", ex);
-        response = error500.HandleRequest(this);
+        response = Error(HttpCode.InternalError);
         SendResponse();
       }
     }
@@ -297,10 +370,14 @@ namespace NMaier.SimpleDlna.Server
     private void ReadNext()
     {
       Method = null;
+      Path = null;
+      protocol = "HTTP/1.1";
       Headers.Clear();
       hasHeaders = false;
+      pipelined = false;
       Body = null;
       bodyBytes = 0;
+      response = null;
       readStream = StreamManager.GetStream();
 
       ++requestCount;
@@ -309,10 +386,52 @@ namespace NMaier.SimpleDlna.Server
       Read();
     }
 
+    /// <summary>
+    ///   Whether the connection survives the response. HTTP/1.1 is persistent
+    ///   unless the client says otherwise; HTTP/1.0 is the reverse.
+    /// </summary>
+    private bool WantsKeepAlive()
+    {
+      if (pipelined) {
+        return false;
+      }
+      string conn;
+      var stated = Headers.TryGetValue("connection", out conn) &&
+                   !string.IsNullOrEmpty(conn);
+      if (stated &&
+          conn.IndexOf("close", StringComparison.OrdinalIgnoreCase) >= 0) {
+        return false;
+      }
+      if (protocol == "HTTP/1.0") {
+        return stated &&
+               conn.IndexOf("keep-alive", StringComparison.OrdinalIgnoreCase) >=
+               0;
+      }
+      return true;
+    }
+
     private void SendResponse()
     {
       var statusCode = response.Status;
-      var responseBody = ProcessRanges(response, ref statusCode);
+      // Private copy: a handler may return a shared response object.
+      var headers = new RawHeaders();
+      foreach (var h in response.Headers) {
+        headers[h.Key] = h.Value;
+      }
+
+      var original = response;
+      var responseBody = ProcessRanges(headers, ref statusCode);
+      if (!ReferenceEquals(original, response)) {
+        // ProcessRanges swapped in an error response.
+        headers.Clear();
+        foreach (var h in response.Headers) {
+          headers[h.Key] = h.Value;
+        }
+      }
+
+      var keepAlive = WantsKeepAlive();
+      headers["Connection"] = keepAlive ? "keep-alive" : "close";
+
       var responseStream = new ConcatenatedStream();
       try {
         var headerBlock = new StringBuilder();
@@ -321,7 +440,7 @@ namespace NMaier.SimpleDlna.Server
           (uint)statusCode,
           HttpPhrases.Phrases[statusCode]
           );
-        headerBlock.Append(response.Headers.HeaderBlock);
+        headerBlock.Append(headers.HeaderBlock);
         headerBlock.Append(CRLF);
 
         var headerStream = new MemoryStream(
@@ -345,10 +464,7 @@ namespace NMaier.SimpleDlna.Server
           pump.Input.Dispose();
           if (result == StreamPumpResult.Delivered) {
             DebugFormat("{0} - Done writing response", this);
-
-            string conn;
-            if (Headers.TryGetValue("connection", out conn) &&
-                conn.ToUpperInvariant() == "KEEP-ALIVE") {
+            if (keepAlive) {
               ReadNext();
               return;
             }
@@ -409,13 +525,13 @@ namespace NMaier.SimpleDlna.Server
 #endif
         switch (ex.Code) {
         case HttpCode.NotFound:
-          response = error404.HandleRequest(this);
+          response = Error(HttpCode.NotFound);
           break;
         case HttpCode.Denied:
-          response = error403.HandleRequest(this);
+          response = Error(HttpCode.Denied);
           break;
         case HttpCode.InternalError:
-          response = error500.HandleRequest(this);
+          response = Error(HttpCode.InternalError);
           break;
         default:
           response = new StaticHandler(new StringResponse(
@@ -428,7 +544,7 @@ namespace NMaier.SimpleDlna.Server
       }
       catch (Exception ex) {
         Warn($"{this} - Failed to process response", ex);
-        response = error500.HandleRequest(this);
+        response = Error(HttpCode.InternalError);
       }
       SendResponse();
     }

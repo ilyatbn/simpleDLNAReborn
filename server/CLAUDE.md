@@ -51,6 +51,52 @@ monitor stays "playing" for `Grace` (15s) after the last stream closes. Without
 that it would flip state several times a minute. Transitions are logged at Info;
 individual streams only at Debug.
 
+## Device identity — do not randomise it
+
+`HttpServer.DeviceGuid(server, address)` derives the UPnP uuid from the server's
+own UUID XORed with the address. It must stay deterministic. A control point
+keys its device list on that uuid, so a fresh one is a **new entry on the TV**,
+not a refresh — and the stale one lingers for the advertised `max-age` (600s).
+It was `Guid.NewGuid()`, which meant every restart, and every `Readvertise()`
+after a network change, left another copy of the server in the TV's list.
+
+`FileServer.DeriveUUID` is stable for the same reason: its tail used to come
+from `Guid.NewGuid()`, so a short friendly name left random bytes in it.
+
+## Range requests and connection reuse (2026-09)
+
+All in `Http/HttpClient.cs`. A scrubbing TV sends a couple of ranged GETs a
+second, so this path is the one that decides how seeking feels.
+
+- **`ProcessRanges` caps the body.** It seeks to `start` and wraps the result in
+  a `LimitedStream`. Without the wrapper the pump runs to EOF: a
+  `Range: bytes=1000-50999` answered `Content-Length: 50000` and then sent
+  200 MB. That also desynchronises the connection, which is why keep-alive was
+  impossible.
+- **Headers go into a per-request copy, never onto the response.** Handlers may
+  hand back a response object shared across connections — `HttpServer`
+  registers one `ResourceResponse` for `/favicon.ico` and keeps it forever.
+  Writing `Content-Length` onto that from two threads is a torn dictionary.
+  `Error()` builds a fresh response for the same reason.
+- **Supported range forms**: `N-M`, `N-`, `-N` (suffix). `start == end` is a
+  legal single byte and a common container probe. Only a start past the end, or
+  an inverted range, is a 416 — and a 416 must carry status, body *and*
+  `Content-Range: bytes */total`. Multi-ranges are not parsed; the whole
+  representation is a legal answer and is what they get.
+- **Keep-alive follows the protocol version.** HTTP/1.1 is persistent unless
+  the client says `Connection: close`; HTTP/1.0 needs an explicit
+  `Connection: keep-alive`. The old code required the explicit header either
+  way while `ResponseHeaders` announced `keep-alive` on every response, so
+  clients were promised reuse and then cut off.
+- **The header parser re-reads `readStream` from offset 0 on every pass**, so
+  `Method`, `Path` and `Headers` are cleared at the top of each pass. A request
+  split across two TCP segments otherwise reparses its own request line as a
+  header and throws. `SetupResponse` only runs once `hasHeaders` is set.
+- **A zero-length read is a close**, not an empty read. Falling through left
+  `Path` holding the previous request and replayed it without its Range header.
+- Pipelined bytes are detected and force `Connection: close`; this parser cannot
+  carry them into the next request and dropping them silently would deadlock.
+
 ## Gotchas
 
 - Item IDs in `Types/Identifiers.cs` are regenerated per process. A URL captured

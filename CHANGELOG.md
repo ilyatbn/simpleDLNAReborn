@@ -1,3 +1,32 @@
+2026.09.20
+---
+- UPnP device identities are derived, not random. Every restart - and every
+  re-announce after a network change - used to mint a fresh uuid, so the TV
+  added another copy of the server to its list and the old one sat there until
+  its max-age expired. Restarting now refreshes the existing entry.
+- fixed byte-range handling, which streamed to the end of the file no matter
+  what was asked for. A "Range: bytes=1000-50999" answered Content-Length 50000
+  and then sent 200 MB. Seeking a TV sends a couple of these a second.
+- "bytes=0-0" and any other single-byte range returned the whole file; a probe
+  at the very end of a file answered 200 OK with the full Content-Length and a
+  sentence of error HTML, so the client waited for a file that never came.
+- suffix ranges ("bytes=-500", the last 500 bytes) are supported at all now.
+  MP4s keep their index at the end and players do ask for it.
+- 416 answers carry a real status, body and Content-Range.
+- HTTP keep-alive works. Persistent by default on HTTP/1.1, as the spec says,
+  instead of demanding an explicit header while advertising keep-alive anyway -
+  which cost a TCP handshake per range request.
+- a request split across two TCP packets is parsed correctly instead of
+  throwing, and a closed connection is no longer replayed as another copy of
+  the previous request.
+- responses are pumped double-buffered: the next block is read while the
+  current one is written. 550 -> 1290 MB/s over loopback.
+- disabled Nagle on media connections.
+- file handles in the stream cache actually expire now; the check compared the
+  age backwards, so nothing ever did.
+- error responses are built per request. Four of them were shared singletons
+  that every connection wrote its own headers onto.
+
 2026.09.19
 ---
 - servers now survive a network change. Switching Wi-Fi network, docking, or

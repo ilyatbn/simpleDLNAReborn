@@ -147,9 +147,19 @@ namespace NMaier.SimpleDlna.FileMediaServer
 
     public event EventHandler Changing;
 
+    /// <summary>
+    ///   Stable across restarts. The tail used to come from Guid.NewGuid, so a
+    ///   server with a short name got a different UUID every run and every TV
+    ///   accumulated a fresh entry for it.
+    /// </summary>
     private Guid DeriveUUID()
     {
-      var bytes = Guid.NewGuid().ToByteArray();
+      var bytes = new byte[16];
+      using (var sha = System.Security.Cryptography.SHA256.Create()) {
+        var hash = sha.ComputeHash(
+          Encoding.UTF8.GetBytes("sdlnafs\0" + FriendlyName));
+        Array.Copy(hash, bytes, bytes.Length);
+      }
       var i = 0;
       var copy = Encoding.ASCII.GetBytes("sdlnafs");
       for (; i < copy.Length; ++i) {

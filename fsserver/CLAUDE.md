@@ -74,6 +74,17 @@ Every rescan raises `Changed`, which is what `MediaMount` turns into a UPnP
 NOTIFY. Breaking that event chain silently stops clients from refreshing, and
 nothing in the server logs will look wrong.
 
+## The file stream cache
+
+`Files/FileStreamCache.cs` pools up to 15 open `FileReadStream`s, keyed by path.
+`FileReadStream.Close()` does not close — it recycles itself back in, rewound;
+only `Kill()` really closes. So whatever wraps a body stream has to call
+`Close()`, not just `Dispose()`.
+
+`Expire()` computed `InsertionPoint - UtcNow`, which is always negative and so
+never crossed the 5 second threshold: nothing ever expired and handles only
+left via the LRU. Fixed 2026-09.
+
 ## Gotchas
 
 - `Files/ImageFile.cs` can log an `InvalidOperationException` out of

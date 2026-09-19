@@ -58,6 +58,8 @@ the solution and cannot be built without VS. Ignore it.
 - Tray app: `SimpleDLNA/TrayContext.cs`
 - Console startup / wiring: `sdlna/Program.cs`, options in `sdlna/Options.cs`
 - HTTP request loop: `server/Http/HTTPServer.cs`, `server/Http/HttpClient.cs`
+- Byte ranges, 416s and keep-alive: `server/Http/HttpClient.cs` — see `server/CLAUDE.md`
+- Optional ffmpeg time-seek indexing, designed but not built: `timeseek.md`
 - DLNA device discovery: `server/Ssdp/SsdpHandler.cs`
 - SOAP / ContentDirectory browse: `server/Handlers/MediaMount_SOAP.cs`
 - Browser UI (the HTML you see at `http://host:port/`): `server/Handlers/MediaMount_HTML.cs` + `server/Resources/browse.css`

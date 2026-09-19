@@ -266,6 +266,23 @@ namespace NMaier.SimpleDlna.Server
     }
 
     /// <summary>
+    ///   The UPnP device identity for one server on one address. Derived, not
+    ///   random: a control point keys its device list on this, so a fresh one
+    ///   is a new entry on the TV rather than a refresh of the old, and the old
+    ///   sits there until its max-age runs out. It used to be Guid.NewGuid, so
+    ///   every restart and every re-advertise left a duplicate behind.
+    /// </summary>
+    private static Guid DeviceGuid(Guid server, IPAddress address)
+    {
+      var bytes = server.ToByteArray();
+      var addr = address.GetAddressBytes();
+      for (var i = 0; i < addr.Length && i < bytes.Length; ++i) {
+        bytes[bytes.Length - 1 - i] ^= addr[i];
+      }
+      return new Guid(bytes);
+    }
+
+    /// <summary>
     ///   Announces one mount on every address this machine currently holds.
     /// </summary>
     /// <returns>How many addresses it was announced on.</returns>
@@ -275,7 +292,7 @@ namespace NMaier.SimpleDlna.Server
       var count = 0;
       foreach (var address in IP.ExternalIPAddresses) {
         DebugFormat("Registering device for {0}", address);
-        var deviceGuid = Guid.NewGuid();
+        var deviceGuid = DeviceGuid(guid, address);
         var list = devicesForServers.GetOrAdd(guid, new List<Guid>());
         lock (list) {
           list.Add(deviceGuid);

@@ -1,9 +1,19 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace NMaier.SimpleDlna.Utilities
 {
+  /// <summary>
+  ///   Reads a queue of streams end to end as though they were one.
+  /// </summary>
+  /// <remarks>
+  ///   Returns a short read at every boundary rather than topping the buffer
+  ///   up from the next stream. ReadAsync is overridden on purpose - see
+  ///   util/CLAUDE.md.
+  /// </remarks>
   public sealed class ConcatenatedStream : Stream
   {
     private readonly Queue<Stream> streams = new Queue<Stream>();
@@ -46,20 +56,36 @@ namespace NMaier.SimpleDlna.Utilities
 
     public override int Read(byte[] buffer, int offset, int count)
     {
-      if (streams.Count == 0) {
-        return 0;
-      }
-
-      var read = streams.Peek().Read(buffer, offset, count);
-      if (read < count) {
-        var sndRead = streams.Peek().Read(buffer, offset + read, count - read);
-        if (sndRead <= 0) {
-          streams.Dequeue().Dispose();
-          return read + Read(buffer, offset + read, count - read);
+      while (streams.Count != 0) {
+        var read = streams.Peek().Read(buffer, offset, count);
+        if (read > 0) {
+          return read;
         }
-        read += sndRead;
+        Advance();
       }
-      return read;
+      return 0;
+    }
+
+    public override async Task<int> ReadAsync(byte[] buffer, int offset,
+      int count, CancellationToken cancellationToken)
+    {
+      while (streams.Count != 0) {
+        var read = await streams.Peek()
+          .ReadAsync(buffer, offset, count, cancellationToken)
+          .ConfigureAwait(false);
+        if (read > 0) {
+          return read;
+        }
+        Advance();
+      }
+      return 0;
+    }
+
+    private void Advance()
+    {
+      var done = streams.Dequeue();
+      done.Close();
+      done.Dispose();
     }
 
     public override long Seek(long offset, SeekOrigin origin)

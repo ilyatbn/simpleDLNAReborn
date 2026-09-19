@@ -22,7 +22,11 @@ namespace NMaier.SimpleDlna.FileMediaServer
     {
       lock (streams) {
         foreach (var item in streams.ToArray()) {
-          var diff = item.Value.InsertionPoint - DateTime.UtcNow;
+          // Age, not its negation. This was InsertionPoint - UtcNow, which is
+          // always negative and so never above the threshold: nothing ever
+          // expired, and a handle only left the cache by being pushed out of
+          // the 15-entry LRU.
+          var diff = DateTime.UtcNow - item.Value.InsertionPoint;
           if (diff.TotalSeconds > 5) {
             item.Value.Stream?.Kill();
             streams.Remove(item.Key);

@@ -1,19 +1,31 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Threading;
+using System.Threading.Tasks;
 using log4net;
 
 namespace NMaier.SimpleDlna.Utilities
 {
+  /// <summary>
+  ///   Copies one stream into another, overlapping the read of the next block
+  ///   with the write of the current one.
+  /// </summary>
+  /// <remarks>Double buffered and ReadAsync-based - see util/CLAUDE.md.</remarks>
   public sealed class StreamPump : IDisposable
   {
-    private readonly byte[] buffer;
+    private static readonly ILog logger =
+      LogManager.GetLogger(typeof (StreamPump));
+
+    private readonly byte[] bufferA;
+
+    private readonly byte[] bufferB;
 
     private readonly SemaphoreSlim sem = new SemaphoreSlim(0, 1);
 
     public StreamPump(Stream inputStream, Stream outputStream, int bufferSize)
     {
-      buffer = new byte[bufferSize];
+      bufferA = new byte[bufferSize];
+      bufferB = new byte[bufferSize];
       Input = inputStream;
       Output = outputStream;
     }
@@ -27,23 +39,66 @@ namespace NMaier.SimpleDlna.Utilities
       sem.Dispose();
     }
 
+    public void Pump(StreamPumpCallback callback)
+    {
+      var ignored = RunAsync(callback);
+    }
+
+    private async Task RunAsync(StreamPumpCallback callback)
+    {
+      var result = StreamPumpResult.Delivered;
+      try {
+        var current = bufferA;
+        var spare = bufferB;
+        var read = await Input.ReadAsync(current, 0, current.Length)
+          .ConfigureAwait(false);
+
+        while (read > 0) {
+          var writing = Output.WriteAsync(current, 0, read);
+          var reading = Input.ReadAsync(spare, 0, spare.Length);
+
+          // Both awaited even on fault, so neither goes unobserved.
+          Exception failure = null;
+          var next = 0;
+          try {
+            next = await reading.ConfigureAwait(false);
+          }
+          catch (Exception ex) {
+            failure = ex;
+          }
+          try {
+            await writing.ConfigureAwait(false);
+          }
+          catch (Exception ex) {
+            failure = failure ?? ex;
+          }
+          if (failure != null) {
+            throw failure;
+          }
+
+          var swap = current;
+          current = spare;
+          spare = swap;
+          read = next;
+        }
+      }
+      catch (Exception ex) {
+        logger.Debug("Stream pump aborted", ex);
+        result = StreamPumpResult.Aborted;
+      }
+      Finish(result, callback);
+    }
+
     private void Finish(StreamPumpResult result, StreamPumpCallback callback)
     {
       if (callback != null) {
-        // Was callback.BeginInvoke(...). Asynchronous delegate invocation only
-        // ever worked on .NET Framework (it needs remoting) and throws
-        // PlatformNotSupportedException elsewhere. Queueing the call gives the
-        // same thing BeginInvoke bought us: the callback runs on the pool
-        // rather than on this I/O completion thread, and it does not block the
-        // sem.Release() below.
         ThreadPool.QueueUserWorkItem(_ =>
         {
           try {
             callback(this, result);
           }
           catch (Exception ex) {
-            LogManager.GetLogger(typeof (StreamPump)).Error(
-              "Stream pump callback failed", ex);
+            logger.Error("Stream pump callback failed", ex);
           }
         });
       }
@@ -51,48 +106,10 @@ namespace NMaier.SimpleDlna.Utilities
         sem.Release();
       }
       catch (ObjectDisposedException) {
-        // ignore
+        // Nobody is waiting any more.
       }
       catch (Exception ex) {
-        LogManager.GetLogger(typeof (StreamPump)).Error(ex.Message, ex);
-      }
-    }
-
-    public void Pump(StreamPumpCallback callback)
-    {
-      try {
-        Input.BeginRead(buffer, 0, buffer.Length, readResult =>
-        {
-          try {
-            var read = Input.EndRead(readResult);
-            if (read <= 0) {
-              Finish(StreamPumpResult.Delivered, callback);
-              return;
-            }
-
-            try {
-              Output.BeginWrite(buffer, 0, read, writeResult =>
-              {
-                try {
-                  Output.EndWrite(writeResult);
-                  Pump(callback);
-                }
-                catch (Exception) {
-                  Finish(StreamPumpResult.Aborted, callback);
-                }
-              }, null);
-            }
-            catch (Exception) {
-              Finish(StreamPumpResult.Aborted, callback);
-            }
-          }
-          catch (Exception) {
-            Finish(StreamPumpResult.Aborted, callback);
-          }
-        }, null);
-      }
-      catch (Exception) {
-        Finish(StreamPumpResult.Aborted, callback);
+        logger.Error(ex.Message, ex);
       }
     }
 
