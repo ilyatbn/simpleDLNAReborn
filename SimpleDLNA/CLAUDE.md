@@ -12,6 +12,7 @@ tray, starting with Windows, and keeping the machine awake.
 | Need | File |
 | --- | --- |
 | Tray icon, menu, lifecycle, logging setup | `TrayContext.cs` |
+| "Restart servers" menu item | `TrayContext.cs` → `RestartServers` |
 | Single instance, second-launch handoff | `Program.cs` |
 | Run-at-login registry handling | `StartUpUtilities.cs` |
 | One-time import of the old user.config | `TrayContext.cs` → `LegacySettings` |

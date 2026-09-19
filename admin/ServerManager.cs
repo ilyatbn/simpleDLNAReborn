@@ -294,6 +294,53 @@ namespace NMaier.SimpleDlna.Admin
     }
 
     /// <summary>
+    ///   Stops and starts everything that is running, in sequence.
+    /// </summary>
+    /// <remarks>
+    ///   Sequential on purpose. Each restart reloads a library and re-registers
+    ///   a mount, and doing several at once buys nothing while making the log
+    ///   and the SSDP traffic much harder to read. Servers that are stopped are
+    ///   left alone - starting them would be a policy decision this is not.
+    /// </remarks>
+    public RestartAllResult RestartAll()
+    {
+      var restarted = 0;
+      var failed = 0;
+      foreach (var s in Servers) {
+        if (!s.IsRunning) {
+          continue;
+        }
+        try {
+          s.Restart();
+          // A failed start flips Active off and leaves the server stopped;
+          // ManagedServer already logged why.
+          if (s.IsRunning) {
+            ++restarted;
+          }
+          else {
+            ++failed;
+          }
+        }
+        catch (Exception ex) {
+          log.Error($"Failed to restart {s.Description.Name}", ex);
+          ++failed;
+        }
+      }
+      Save();
+      return new RestartAllResult(restarted, failed);
+    }
+
+    /// <summary>
+    ///   Re-announces every mount on the addresses the machine holds now,
+    ///   without reloading anything.
+    /// </summary>
+    /// <returns>How many mounts were re-announced.</returns>
+    public int Readvertise()
+    {
+      return Server.Readvertise();
+    }
+
+    /// <summary>
     ///   Stops every running server, deletes the metadata cache and starts them
     ///   again.
     /// </summary>
@@ -377,5 +424,18 @@ namespace NMaier.SimpleDlna.Admin
     public int Requested { get; }
 
     public int Skipped { get; }
+  }
+
+  public struct RestartAllResult
+  {
+    internal RestartAllResult(int restarted, int failed)
+    {
+      Restarted = restarted;
+      Failed = failed;
+    }
+
+    public int Restarted { get; }
+
+    public int Failed { get; }
   }
 }

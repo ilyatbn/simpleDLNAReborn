@@ -1,3 +1,20 @@
+2026.09.19
+---
+- servers now survive a network change. Switching Wi-Fi network, docking, or
+  picking up a DHCP lease in another subnet used to leave every mount
+  advertising an address that no longer existed: SSDP notifications failed to
+  bind with WSAEADDRNOTAVAIL and the server vanished from every player until it
+  was restarted by hand.
+- the change is detected from the IP addresses and their gateways, from the
+  Wi-Fi SSID, or from both (the default) - Settings > Network changes.
+- the response is configurable: re-announce the mounts on the new addresses,
+  which costs no library rescan and is the default, or restart the servers
+  outright.
+- new tray menu item "Restart servers", and POST /api/v1/servers/restart-all
+  and POST /api/v1/servers/readvertise behind it.
+- a datagram queued for an address the machine has left is now one debug line
+  instead of a stack trace at ERROR.
+
 2026.08.11
 ---
 - added a per-server Restart, in the web UI and as

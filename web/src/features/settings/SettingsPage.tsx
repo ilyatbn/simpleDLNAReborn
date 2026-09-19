@@ -11,6 +11,21 @@ import {
   useToast,
 } from '../../components/ui'
 
+// The API answers with the bare keys so it stays the single source of truth;
+// the wording of what each one costs belongs here.
+const ACTION_LABELS: Record<string, string> = {
+  none: 'Do nothing',
+  readvertise: 'Re-announce the servers (fast, no rescan)',
+  restart: 'Restart the servers (reloads every library)',
+}
+
+const SIGNAL_LABELS: Record<string, string> = {
+  none: 'Nothing — never detect a change',
+  ip: 'IP address or gateway',
+  ssid: 'Wi-Fi network name',
+  both: 'Either one (recommended)',
+}
+
 export function SettingsPage() {
   const toast = useToast()
   const { status, refreshStatus } = useLive()
@@ -47,6 +62,9 @@ export function SettingsPage() {
         rescanDelaySeconds: form.rescanDelaySeconds,
         rescanIntervalMinutes: form.rescanIntervalMinutes,
         logLevel: form.logLevel,
+        networkChangeAction: form.networkChangeAction,
+        networkChangeSignal: form.networkChangeSignal,
+        networkSettleSeconds: form.networkSettleSeconds,
         preventSleep: form.preventSleep,
         ...(tray
           ? {
@@ -201,6 +219,67 @@ export function SettingsPage() {
             <div className="small muted">
               Both apply the next time a server is restarted — use{' '}
               <strong>Restart</strong> on the Servers page to apply them now.
+            </div>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Network changes</legend>
+          <div className="stack">
+            <div className="small muted">
+              A server advertises itself on the addresses it had when it
+              started. Join another Wi-Fi network, dock, or pick up a new DHCP
+              lease and those addresses stop existing, so it disappears from
+              every player until something puts it right.
+            </div>
+            <label className="field" style={{ maxWidth: '22rem' }}>
+              When the network changes
+              <select
+                value={form.networkChangeAction}
+                onChange={(e) =>
+                  patch({ networkChangeAction: e.target.value })
+                }
+              >
+                {(caps.data?.networkChangeActions ?? []).map((a) => (
+                  <option key={a} value={a}>
+                    {ACTION_LABELS[a] ?? a}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <FieldErrors errors={errors.networkChangeAction} />
+            <label className="field" style={{ maxWidth: '22rem' }}>
+              Detect the change by
+              <select
+                value={form.networkChangeSignal}
+                onChange={(e) =>
+                  patch({ networkChangeSignal: e.target.value })
+                }
+              >
+                {(caps.data?.networkChangeSignals ?? []).map((s) => (
+                  <option key={s} value={s}>
+                    {SIGNAL_LABELS[s] ?? s}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <FieldErrors errors={errors.networkChangeSignal} />
+            <label className="field" style={{ maxWidth: '22rem' }}>
+              Seconds to wait for the network to settle
+              <input
+                type="number"
+                min={1}
+                max={300}
+                value={form.networkSettleSeconds}
+                onChange={(e) =>
+                  patch({ networkSettleSeconds: Number(e.target.value) })
+                }
+              />
+            </label>
+            <FieldErrors errors={errors.networkSettleSeconds} />
+            <div className="small muted">
+              A Wi-Fi switch passes through several half-connected states, so
+              nothing happens until the network has held still this long.
             </div>
           </div>
         </fieldset>

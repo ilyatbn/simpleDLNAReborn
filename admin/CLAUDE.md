@@ -13,6 +13,7 @@ cannot drift apart.
 | --- | --- |
 | Own every configured server, persist them | `ServerManager.cs` |
 | Start/stop/rescan one server | `ManagedServer.cs` |
+| React to a network change | `NetworkWatcher.cs` |
 | The persisted per-server model | `ServerDescription.cs` |
 | descriptors.xml read/write | `DescriptorStore.cs` |
 | Global settings + migration | `SettingsStore.cs`, `AppSettings.cs` |

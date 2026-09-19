@@ -65,6 +65,8 @@ export interface Capabilities {
   mediaTypes: string[]
   restrictionTypes: string[]
   logLevels: string[]
+  networkChangeActions: string[]
+  networkChangeSignals: string[]
 }
 
 export interface Restrictions {
@@ -107,6 +109,9 @@ export interface Settings {
   rescanDelaySeconds: number
   rescanIntervalMinutes: number
   logLevel: string
+  networkChangeAction: string
+  networkChangeSignal: string
+  networkSettleSeconds: number
   startMinimized?: boolean | null
   preventSleep: boolean
   autostart?: boolean | null

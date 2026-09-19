@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using log4net;
 using log4net.Appender;
@@ -40,6 +41,8 @@ namespace NMaier.SimpleDlna.GUI
     private readonly ServerManager manager;
 
     private readonly NotifyIcon notifyIcon;
+
+    private readonly NetworkWatcher networkWatcher;
 
     private readonly SettingsStore settings;
 
@@ -89,6 +92,11 @@ namespace NMaier.SimpleDlna.GUI
 
       manager.Load();
       UpdateSleepInhibitor();
+
+      // Started after Load, so the first fingerprint is taken with the mounts
+      // already advertised on the addresses it is about to watch.
+      networkWatcher = new NetworkWatcher(manager, settings);
+      networkWatcher.Start();
     }
 
     /// <summary>
@@ -116,8 +124,67 @@ namespace NMaier.SimpleDlna.GUI
       };
       menu.Items.Add(open);
       menu.Items.Add(new ToolStripSeparator());
+      menu.Items.Add(new ToolStripMenuItem("Restart servers", null,
+        (s, e) => RestartServers()));
+      menu.Items.Add(new ToolStripSeparator());
       menu.Items.Add(new ToolStripMenuItem("Exit", null, (s, e) => Quit()));
       return menu;
+    }
+
+    /// <summary>
+    ///   Stops and starts every running server.
+    /// </summary>
+    /// <remarks>
+    ///   The manual counterpart to <see cref="NetworkWatcher" />, for when the
+    ///   automatic handling is switched off or something else left a server
+    ///   wedged. Restarting reloads each library, so it runs off the UI thread
+    ///   and reports through a balloon rather than blocking the message loop -
+    ///   the tray menu would otherwise stay open and unpainted for the whole
+    ///   scan.
+    /// </remarks>
+    private void RestartServers()
+    {
+      Task.Run(() =>
+      {
+        try {
+          var result = manager.RestartAll();
+          Notify(
+            result.Failed == 0
+              ? $"Restarted {result.Restarted} server(s)."
+              : $"Restarted {result.Restarted} server(s), {result.Failed} failed. See sdlna.log.",
+            result.Failed == 0 ? ToolTipIcon.Info : ToolTipIcon.Warning);
+        }
+        catch (Exception ex) {
+          log.Error("Failed to restart the servers", ex);
+          Notify($"Could not restart the servers: {ex.Message}",
+            ToolTipIcon.Error);
+        }
+      });
+    }
+
+    /// <summary>
+    ///   Shows a balloon from whatever thread is calling.
+    /// </summary>
+    private void Notify(string message, ToolTipIcon icon)
+    {
+      try {
+        if (disposed) {
+          return;
+        }
+        // NotifyIcon is a control-like component: touching it off the thread
+        // that created it is exactly the race WinForms forbids. The menu is
+        // the only Control here, so it is what carries the marshalling - and
+        // only once it has a handle, which it gets the first time it is shown.
+        var menu = notifyIcon.ContextMenuStrip;
+        if (menu != null && menu.IsHandleCreated && menu.InvokeRequired) {
+          menu.BeginInvoke(new Action(() => Notify(message, icon)));
+          return;
+        }
+        notifyIcon.ShowBalloonTip(6000, "SimpleDLNA", message, icon);
+      }
+      catch (Exception ex) {
+        log.Debug("Failed to show a balloon", ex);
+      }
     }
 
     private AdminHost StartAdmin()
@@ -198,6 +265,7 @@ namespace NMaier.SimpleDlna.GUI
         TimeSpan.FromSeconds(s.RescanDelaySeconds);
       manager.Options.RescanInterval =
         TimeSpan.FromMinutes(s.RescanIntervalMinutes);
+      networkWatcher?.Reconfigure();
       UpdateSleepInhibitor();
     }
 
@@ -321,6 +389,7 @@ namespace NMaier.SimpleDlna.GUI
         disposed = true;
         try {
           notifyIcon.Visible = false;
+          networkWatcher?.Dispose();
           adminHost?.Dispose();
           settings.Changed -= SettingsChanged;
           manager?.Dispose();

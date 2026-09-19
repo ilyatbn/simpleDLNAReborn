@@ -258,11 +258,21 @@ namespace NMaier.SimpleDlna.Server
         throw new ArgumentException("Attempting to register more than once");
       }
 
-      var end = (IPEndPoint)listener.LocalEndpoint;
       var mount = new MediaMount(server);
       servers[guid] = mount;
       RegisterHandler(mount);
 
+      Advertise(guid, mount);
+    }
+
+    /// <summary>
+    ///   Announces one mount on every address this machine currently holds.
+    /// </summary>
+    /// <returns>How many addresses it was announced on.</returns>
+    private int Advertise(Guid guid, MediaMount mount)
+    {
+      var end = (IPEndPoint)listener.LocalEndpoint;
+      var count = 0;
       foreach (var address in IP.ExternalIPAddresses) {
         DebugFormat("Registering device for {0}", address);
         var deviceGuid = Guid.NewGuid();
@@ -276,7 +286,61 @@ namespace NMaier.SimpleDlna.Server
           ssdpServer.RegisterNotification(deviceGuid, uri, address);
         }
         NoticeFormat("New mount at: {0}", uri);
+        ++count;
       }
+      return count;
+    }
+
+    /// <summary>
+    ///   Re-announces every mount on the addresses this machine holds now.
+    /// </summary>
+    /// <remarks>
+    ///   <para>
+    ///     The addresses a mount advertises are captured once, at registration:
+    ///     they go into the SSDP device record and into the LOCATION URL of
+    ///     every alive notification and M-SEARCH reply. Change network and all
+    ///     of that describes an address that no longer exists - notifications
+    ///     fail to bind with WSAEADDRNOTAVAIL, and a client that did cache the
+    ///     old LOCATION cannot reach it either.
+    ///   </para>
+    ///   <para>
+    ///     Only the announcement is rebuilt. The TCP listener is bound to
+    ///     <see cref="IPAddress.Any" /> and needs nothing, and the media
+    ///     servers behind the mounts are untouched, so this costs no library
+    ///     rescan - which is the whole reason to prefer it over restarting.
+    ///   </para>
+    /// </remarks>
+    /// <returns>How many mounts were re-announced.</returns>
+    public int Readvertise()
+    {
+      ssdpServer.Rebind();
+
+      var mounts = 0;
+      foreach (var entry in servers) {
+        var guid = entry.Key;
+        var mount = entry.Value;
+        List<Guid> previous;
+        if (devicesForServers.TryRemove(guid, out previous)) {
+          lock (previous) {
+            foreach (var deviceGuid in previous) {
+              ssdpServer.ForgetNotification(deviceGuid);
+            }
+          }
+        }
+        mount.ClearDeviceGuids();
+        try {
+          if (Advertise(guid, mount) != 0) {
+            ++mounts;
+          }
+        }
+        catch (Exception ex) {
+          // IP.ExternalIPAddresses throws when the machine has no usable
+          // address at all. One mount failing must not skip the rest.
+          Error($"Failed to re-announce {mount.FriendlyName}", ex);
+        }
+      }
+      NoticeFormat("Re-announced {0} mount(s) after a network change", mounts);
+      return mounts;
     }
 
     public void UnregisterMediaServer(IMediaServer server)

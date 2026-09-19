@@ -90,7 +90,14 @@ namespace NMaier.SimpleDlna.Server.Ssdp
         datagramPosted.WaitOne();
       }
 
-      client.DropMulticastGroup(ssdpIP);
+      // Throws if the group was never joined, or was lost with the interface
+      // it was joined on; either way the rest of the teardown must still run.
+      try {
+        client.DropMulticastGroup(ssdpIP);
+      }
+      catch (Exception ex) {
+        Debug("Failed to drop the SSDP multicast group", ex);
+      }
 
       notificationTimer.Enabled = false;
       queueTimer.Enabled = false;
@@ -315,6 +322,62 @@ namespace NMaier.SimpleDlna.Server.Ssdp
         NotifyDevice(d, "byebye", true);
       }
       DebugFormat("Unregistered mount {0}", uuid);
+    }
+
+    /// <summary>
+    ///   Drops a registration without announcing it.
+    /// </summary>
+    /// <remarks>
+    ///   For the network-change path only. A byebye would go out from an
+    ///   address this machine no longer holds, so it cannot reach the old
+    ///   network, and on the new one it would retract a device that was never
+    ///   announced there. Clients on the old network fall back on the
+    ///   <c>max-age</c> of the last alive instead.
+    /// </remarks>
+    internal void ForgetNotification(Guid uuid)
+    {
+      lock (devices) {
+        devices.Remove(uuid);
+      }
+      DebugFormat("Forgot mount {0}", uuid);
+    }
+
+    /// <summary>
+    ///   Re-establishes the multicast membership after the machine changed
+    ///   network.
+    /// </summary>
+    /// <remarks>
+    ///   The socket itself survives - it is bound to <see cref="IPAddress.Any" />
+    ///   - but the IGMP membership was joined on the interface that just went
+    ///   away, so without this no M-SEARCH from the new network is ever seen.
+    ///   Anything still queued was addressed from the old network and can only
+    ///   fail to bind, so it is discarded rather than retried.
+    /// </remarks>
+    internal void Rebind()
+    {
+      Datagram stale;
+      var dropped = 0;
+      while (messageQueue.TryDequeue(out stale)) {
+        ++dropped;
+      }
+      if (dropped != 0) {
+        DebugFormat("Discarded {0} datagram(s) queued for the old network",
+          dropped);
+      }
+
+      try {
+        client.DropMulticastGroup(ssdpIP);
+      }
+      catch (Exception ex) {
+        Debug("Failed to drop the SSDP multicast group", ex);
+      }
+      try {
+        client.JoinMulticastGroup(ssdpIP, 10);
+        Notice("SSDP multicast membership renewed");
+      }
+      catch (Exception ex) {
+        Error("Failed to rejoin the SSDP multicast group", ex);
+      }
     }
   }
 }

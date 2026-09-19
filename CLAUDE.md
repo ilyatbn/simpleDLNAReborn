@@ -53,6 +53,7 @@ the solution and cannot be built without VS. Ignore it.
 
 - Admin REST API: `admin/Api/ApiHandler.cs`; its listener in `admin/Http/AdminServer.cs`
 - Server lifecycle (start/stop/rescan, descriptors.xml): `admin/ServerManager.cs`
+- Surviving a network change: `util/NetworkMonitor.cs` detects, `admin/NetworkWatcher.cs` acts, `server/Http/HttpServer.cs` → `Readvertise()` fixes the advertisement
 - Admin web UI: `web/src/` — see `web/CLAUDE.md`
 - Tray app: `SimpleDLNA/TrayContext.cs`
 - Console startup / wiring: `sdlna/Program.cs`, options in `sdlna/Options.cs`
@@ -102,3 +103,24 @@ The WinForms GUI is gone; `modernization.md` is the design record and
 - **`server/Http/HttpClient.cs:259` re-encodes request bodies as ASCII**, which
   corrupts any non-ASCII SOAP request. Known, documented in §2.13, not yet
   fixed — the admin API sidesteps it by not using that parser.
+
+## Network changes (2026-09)
+
+A mount captures the machine's addresses **once**, at
+`HttpServer.RegisterMediaServer`, and bakes them into the SSDP device records
+and every LOCATION URL. Change network and all of it is stale. Three pieces:
+
+- `util/NetworkMonitor.cs` — builds a fingerprint (IPv4 addresses paired with
+  their gateways, plus the Wi-Fi SSIDs from `util/Wlan.cs`), watches
+  `NetworkChange` *and* polls, and coalesces the burst of events a Wi-Fi switch
+  produces behind a settle timer.
+- `admin/NetworkWatcher.cs` — applies the configured action. UI-free, so the
+  console and the tray behave identically.
+- `HttpServer.Readvertise()` — rebuilds only the announcement. The TCP listener
+  is bound to `IPAddress.Any` and never needed fixing; the media servers are
+  untouched, so nothing is rescanned. This is why `readvertise` is the default
+  action and `restart` is the fallback, not the other way round.
+
+`SsdpHandler.ForgetNotification` exists because a byebye on the way out would
+go from an address the machine no longer holds — it cannot reach the old
+network and would retract a device that was never announced on the new one.

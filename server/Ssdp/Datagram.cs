@@ -54,6 +54,15 @@ namespace NMaier.SimpleDlna.Server.Ssdp
           }
         }, null);
       }
+      catch (SocketException ex)
+        when (ex.SocketErrorCode == SocketError.AddressNotAvailable) {
+        // WSAEADDRNOTAVAIL: LocalAddress belonged to a network this machine
+        // has since left. Expected between a Wi-Fi switch and the re-advertise
+        // that follows it, and it used to bury the log in stack traces, so it
+        // is reported as the one-line fact it is.
+        DebugFormat("Dropping a datagram for the stale address {0}",
+          LocalAddress);
+      }
       catch (Exception ex) {
         Error(ex);
       }

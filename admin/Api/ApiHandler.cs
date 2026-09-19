@@ -185,6 +185,28 @@ namespace NMaier.SimpleDlna.Admin.Api
           });
         }
 
+        if (s[1] == "restart-all" && s.Length == 2) {
+          if (m != "POST") {
+            return MethodNotAllowed();
+          }
+          // Each restart reloads a library, so this answers immediately and
+          // reports through /events, the same as the per-server actions.
+          RunInBackground(() => context.Manager.RestartAll(), "restart-all");
+          return AdminResponse.Empty(202);
+        }
+
+        if (s[1] == "readvertise" && s.Length == 2) {
+          if (m != "POST") {
+            return MethodNotAllowed();
+          }
+          // Cheap enough to answer inline: nothing is reloaded, only the SSDP
+          // announcements are rebuilt against the current addresses.
+          return Ok(new ReadvertiseDto
+          {
+            Mounts = context.Manager.Readvertise()
+          });
+        }
+
         Guid id;
         if (!Guid.TryParse(s[1], out id)) {
           throw new ApiException(404, "not_found", "No such server.");
@@ -335,6 +357,22 @@ namespace NMaier.SimpleDlna.Admin.Api
         errors.Add(new FieldError("logLevel",
           "Must be one of " + string.Join(", ", AppSettings.LogLevels)));
       }
+      if (Array.IndexOf(AppSettings.NetworkChangeActions,
+        input.NetworkChangeAction) < 0) {
+        errors.Add(new FieldError("networkChangeAction",
+          "Must be one of " +
+          string.Join(", ", AppSettings.NetworkChangeActions)));
+      }
+      if (Array.IndexOf(AppSettings.NetworkChangeSignals,
+        input.NetworkChangeSignal) < 0) {
+        errors.Add(new FieldError("networkChangeSignal",
+          "Must be one of " +
+          string.Join(", ", AppSettings.NetworkChangeSignals)));
+      }
+      if (input.NetworkSettleSeconds < 1 || input.NetworkSettleSeconds > 300) {
+        errors.Add(new FieldError(
+          "networkSettleSeconds", "Must be between 1 and 300"));
+      }
       if (errors.Count != 0) {
         throw new ApiException(422, "validation_failed",
           "The settings are not valid.", errors);
@@ -347,6 +385,9 @@ namespace NMaier.SimpleDlna.Admin.Api
       settings.RescanDelaySeconds = input.RescanDelaySeconds;
       settings.RescanIntervalMinutes = input.RescanIntervalMinutes;
       settings.LogLevel = input.LogLevel;
+      settings.NetworkChangeAction = input.NetworkChangeAction;
+      settings.NetworkChangeSignal = input.NetworkChangeSignal;
+      settings.NetworkSettleSeconds = input.NetworkSettleSeconds;
       settings.PreventSleep = input.PreventSleep;
       if (input.StartMinimized.HasValue) {
         settings.StartMinimized = input.StartMinimized.Value;
@@ -446,7 +487,9 @@ namespace NMaier.SimpleDlna.Admin.Api
         Views = views,
         MediaTypes = new List<string> {"video", "audio", "image"},
         RestrictionTypes = new List<string> {"mac", "ip", "userAgent"},
-        LogLevels = AppSettings.LogLevels.ToList()
+        LogLevels = AppSettings.LogLevels.ToList(),
+        NetworkChangeActions = AppSettings.NetworkChangeActions.ToList(),
+        NetworkChangeSignals = AppSettings.NetworkChangeSignals.ToList()
       };
     }
 
@@ -461,6 +504,9 @@ namespace NMaier.SimpleDlna.Admin.Api
         RescanDelaySeconds = s.RescanDelaySeconds,
         RescanIntervalMinutes = s.RescanIntervalMinutes,
         LogLevel = s.LogLevel,
+        NetworkChangeAction = s.NetworkChangeAction,
+        NetworkChangeSignal = s.NetworkChangeSignal,
+        NetworkSettleSeconds = s.NetworkSettleSeconds,
         StartMinimized = tray ? (bool?)s.StartMinimized : null,
         PreventSleep = s.PreventSleep,
         Autostart = tray && context.GetAutostart != null

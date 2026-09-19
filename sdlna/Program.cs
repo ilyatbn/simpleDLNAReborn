@@ -184,9 +184,15 @@ namespace NMaier.SimpleDlna
 
               Console.Title = $"{friendlyName} - running ...";
 
-              using (var admin = StartAdmin(options, server, manager,
-                settings)) {
-                Run(server, admin);
+              // Moving between networks invalidates the addresses the mounts
+              // advertise, whether the servers came from descriptors.xml or
+              // from the command line, so this applies in both modes.
+              using (var network = new NetworkWatcher(manager, settings)) {
+                network.Start();
+                using (var admin = StartAdmin(options, server, manager,
+                  settings)) {
+                  Run(server, admin);
+                }
               }
               manager.Dispose();
             }

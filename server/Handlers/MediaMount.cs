@@ -249,7 +249,9 @@ namespace NMaier.SimpleDlna.Server
       var doc = new XmlDocument();
       doc.LoadXml(Resources.description);
       Guid guid;
-      guidsForAddresses.TryGetValue(source, out guid);
+      lock (guidsForAddresses) {
+        guidsForAddresses.TryGetValue(source, out guid);
+      }
       doc.SelectSingleNode("//*[local-name() = 'UDN']").InnerText =
         $"uuid:{guid}";
       doc.SelectSingleNode("//*[local-name() = 'modelNumber']").InnerText =
@@ -299,7 +301,22 @@ namespace NMaier.SimpleDlna.Server
 
     public void AddDeviceGuid(Guid guid, IPAddress address)
     {
-      guidsForAddresses.Add(address, guid);
+      lock (guidsForAddresses) {
+        // Assigned rather than Add()ed: a re-advertise after a network change
+        // can legitimately hand back an address the mount already knows.
+        guidsForAddresses[address] = guid;
+      }
+    }
+
+    /// <summary>
+    ///   Forgets every address this mount was advertised on, so the next
+    ///   registration starts from the addresses the machine has now.
+    /// </summary>
+    public void ClearDeviceGuids()
+    {
+      lock (guidsForAddresses) {
+        guidsForAddresses.Clear();
+      }
     }
   }
 }

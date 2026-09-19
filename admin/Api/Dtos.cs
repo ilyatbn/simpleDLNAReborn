@@ -136,6 +136,10 @@ namespace NMaier.SimpleDlna.Admin.Api
     public List<string> RestrictionTypes { get; set; }
 
     public List<string> LogLevels { get; set; }
+
+    public List<string> NetworkChangeActions { get; set; }
+
+    public List<string> NetworkChangeSignals { get; set; }
   }
 
   public sealed class RestrictionsDto
@@ -213,6 +217,19 @@ namespace NMaier.SimpleDlna.Admin.Api
     public int Skipped { get; set; }
   }
 
+  public sealed class RestartAllDto
+  {
+    public int Restarted { get; set; }
+
+    public int Failed { get; set; }
+  }
+
+  public sealed class ReadvertiseDto
+  {
+    /// <summary>How many mounts were announced again.</summary>
+    public int Mounts { get; set; }
+  }
+
   public sealed class SettingsDto
   {
     public int Port { get; set; }
@@ -224,6 +241,12 @@ namespace NMaier.SimpleDlna.Admin.Api
     public int RescanIntervalMinutes { get; set; }
 
     public string LogLevel { get; set; }
+
+    public string NetworkChangeAction { get; set; }
+
+    public string NetworkChangeSignal { get; set; }
+
+    public int NetworkSettleSeconds { get; set; }
 
     public bool? StartMinimized { get; set; }
 
