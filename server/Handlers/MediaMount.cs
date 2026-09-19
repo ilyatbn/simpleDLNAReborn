@@ -124,7 +124,12 @@ namespace NMaier.SimpleDlna.Server
         if (item == null) {
           throw new HttpStatusException(HttpCode.NotFound);
         }
-        return new ItemResponse(Prefix, request, item.Cover, "Interactive");
+        var cover = item.Cover;
+        if ((cover as IMetaInfo)?.InfoSize == null) {
+          DebugFormat("No cover data for {0}", id);
+          throw new HttpStatusException(HttpCode.NotFound);
+        }
+        return new ItemResponse(Prefix, request, cover, "Interactive");
       }
       if (path.StartsWith("subtitle/", StringComparison.Ordinal)) {
         var id = path.Split('/')[1];

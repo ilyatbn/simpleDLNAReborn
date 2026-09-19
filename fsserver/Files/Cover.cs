@@ -20,8 +20,6 @@ namespace NMaier.SimpleDlna.FileMediaServer
 
     private int height = 216;
 
-    private bool warned;
-
     private int width = 384;
 
     private Cover(SerializationInfo info, StreamingContext ctx)
@@ -185,13 +183,7 @@ namespace NMaier.SimpleDlna.FileMediaServer
         Debug("Failed to load thumb for " + file.FullName, ex);
       }
       catch (Exception ex) {
-        if (!warned) {
-          Warn("Failed to load thumb for " + file.FullName, ex);
-          warned = true;
-        }
-        else {
-          Debug("Failed to load thumb for " + file.FullName, ex);
-        }
+        Debug("Failed to load thumb for " + file.FullName, ex);
         return null;
       }
       if (bytes == null) {
